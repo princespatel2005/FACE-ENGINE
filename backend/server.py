@@ -24,7 +24,10 @@ from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
+<<<<<<< HEAD
 load_dotenv(ROOT_DIR.parent / ".env")
+=======
+>>>>>>> 64de090926fd3c64d3889c507e4e8a19c72ba5fc
 
 import bcrypt
 import jwt
@@ -32,7 +35,10 @@ import numpy as np
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+<<<<<<< HEAD
 import certifi
+=======
+>>>>>>> 64de090926fd3c64d3889c507e4e8a19c72ba5fc
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field
 
@@ -49,21 +55,33 @@ ACCESS_TTL = timedelta(hours=12)
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@example.com")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 MATCH_THRESHOLD = float(os.environ.get("FACE_MATCH_THRESHOLD", "0.42"))
+<<<<<<< HEAD
 UPLOAD_ROOT = Path(os.environ.get("UPLOAD_ROOT", str(ROOT_DIR / "uploads")))
+=======
+UPLOAD_ROOT = Path(os.environ.get("UPLOAD_ROOT", "/app/backend/uploads"))
+>>>>>>> 64de090926fd3c64d3889c507e4e8a19c72ba5fc
 UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 (UPLOAD_ROOT / "users").mkdir(exist_ok=True)
 (UPLOAD_ROOT / "unknowns").mkdir(exist_ok=True)
 (UPLOAD_ROOT / "cameras").mkdir(exist_ok=True)
 KIOSK_UNKNOWN_ALERT_COOLDOWN_S = int(os.environ.get("KIOSK_UNKNOWN_ALERT_COOLDOWN_S", "60"))
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "")
+<<<<<<< HEAD
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "sentinel_fr")
+=======
+>>>>>>> 64de090926fd3c64d3889c507e4e8a19c72ba5fc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s")
 logger = logging.getLogger("faceapp")
 
+<<<<<<< HEAD
 client = AsyncIOMotorClient(MONGO_URL, tlsCAFile=certifi.where())
 db = client[DB_NAME]
+=======
+client = AsyncIOMotorClient(os.environ["MONGO_URL"])
+db = client[os.environ["DB_NAME"]]
+>>>>>>> 64de090926fd3c64d3889c507e4e8a19c72ba5fc
 
 app = FastAPI(title="Smart AI Face Recognition")
 
@@ -261,6 +279,7 @@ async def _on_camera_detections(cam_id: str, cam_name: str, detections: list, an
 
 @app.on_event("startup")
 async def on_startup():
+<<<<<<< HEAD
     try:
         await db.admins.create_index("email", unique=True)
         await db.users.create_index("id", unique=True)
@@ -296,6 +315,35 @@ async def on_startup():
         logger.error("Please update MONGO_URL in backend/.env with your correct MongoDB Atlas password or connection string.")
         logger.error("=" * 60)
         raise err
+=======
+    await db.admins.create_index("email", unique=True)
+    await db.users.create_index("id", unique=True)
+    await db.users.create_index([("name", "text"), ("employee_id", "text"), ("department", "text"), ("phone", "text")])
+    await db.embeddings.create_index("user_id")
+    await db.attendance_logs.create_index("timestamp")
+    await db.recognition_logs.create_index("timestamp")
+    await db.unknown_people.create_index("timestamp")
+    await db.alerts.create_index("timestamp")
+    await db.cameras.create_index("id", unique=True)
+
+    existing = await db.admins.find_one({"email": ADMIN_EMAIL})
+    if not existing:
+        await db.admins.insert_one({
+            "id": str(uuid.uuid4()),
+            "email": ADMIN_EMAIL,
+            "name": "Administrator",
+            "role": "admin",
+            "password_hash": hash_password(ADMIN_PASSWORD),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info("Seeded admin %s", ADMIN_EMAIL)
+    elif not verify_password(ADMIN_PASSWORD, existing["password_hash"]):
+        await db.admins.update_one(
+            {"email": ADMIN_EMAIL},
+            {"$set": {"password_hash": hash_password(ADMIN_PASSWORD)}},
+        )
+        logger.info("Refreshed admin password")
+>>>>>>> 64de090926fd3c64d3889c507e4e8a19c72ba5fc
 
     engine.start_background_load()
 
@@ -957,6 +1005,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+<<<<<<< HEAD
 
 
 if __name__ == "__main__":
@@ -964,3 +1013,5 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)
 
+=======
+>>>>>>> 64de090926fd3c64d3889c507e4e8a19c72ba5fc

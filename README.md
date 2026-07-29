@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Smart AI Face Recognition System (FACE-ENGINE)
 
 An enterprise-grade, real-time AI face recognition system with FastAPI backend (InsightFace SCRFD detector + ResNet50 embeddings), React frontend, MongoDB storage, and alert management.
@@ -41,3 +42,6 @@ This repository includes a `render.yaml` blueprint.
 4. Set your `MONGO_URL` (MongoDB Atlas URI) when prompted.
 
 For detailed instructions, see [DEPLOYMENT.md](DEPLOYMENT.md).
+=======
+# Here are your Instructions
+>>>>>>> 64de090926fd3c64d3889c507e4e8a19c72ba5fc
