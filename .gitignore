@@ -96,3 +96,6 @@ frontend/.example.env
 backend/.env
 backend/.env.example
 backend/.example.env
+
+.env.example
+.example.env
