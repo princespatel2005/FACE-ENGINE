@@ -16,12 +16,8 @@ export default function Kiosk() {
   const [countdown, setCountdown] = useState(0);
   const busy = useRef(false);
 
-<<<<<<< HEAD
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { start(); return () => stop(); }, []);
-=======
-  useEffect(() => { start(); return () => stop(); /* eslint-disable-next-line */ }, []);
->>>>>>> 64de090926fd3c64d3889c507e4e8a19c72ba5fc
 
   useEffect(() => {
     if (!running || !token) return;

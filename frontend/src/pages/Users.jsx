@@ -17,12 +17,8 @@ export default function Users() {
     } finally { setLoading(false); }
   };
 
-<<<<<<< HEAD
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, []);
-=======
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
->>>>>>> 64de090926fd3c64d3889c507e4e8a19c72ba5fc
 
   const del = async (id) => {
     if (!window.confirm("Delete this user and all embeddings?")) return;
