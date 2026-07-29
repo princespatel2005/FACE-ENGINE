@@ -108,7 +108,8 @@ backend/.env
 frontend/.env
 
 # Keep template files
-!.env.example
-!.example.env
-!backend/.env.example
-!backend/.example.env
+.env.example
+.example.env
+backend/.env.example
+backend/.example.env
+
