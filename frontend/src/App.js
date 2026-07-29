@@ -1,56 +1,65 @@
-import { useEffect } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
-import { HOME } from "@/constants/testIds";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { Toaster } from "sonner";
+import { AuthProvider, useAuth } from "@/context/AuthContext";
+import Layout from "@/components/Layout";
+import Login from "@/pages/Login";
+import Dashboard from "@/pages/Dashboard";
+import LiveRecognition from "@/pages/LiveRecognition";
+import RegisterUser from "@/pages/RegisterUser";
+import Users from "@/pages/Users";
+import Attendance from "@/pages/Attendance";
+import RecognitionHistory from "@/pages/RecognitionHistory";
+import UnknownPersons from "@/pages/UnknownPersons";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+function Protected({ children }) {
+  const { user, initialized } = useAuth();
+  if (!initialized) {
+    return (
+      <div className="min-h-screen bg-[#0A0A0A] text-white/50 font-mono flex items-center justify-center text-sm">
+        Booting Sentinel FR…
+      </div>
+    );
+  }
+  if (!user) return <Navigate to="/login" replace />;
+  return <Layout>{children}</Layout>;
+}
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
+function AppRoutes() {
   return (
-    <div>
-      <header className="App-header">
-        <a
-          data-testid={HOME.emergentLink}
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
-
-function App() {
-  return (
-    <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </div>
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/" element={<Protected><Dashboard /></Protected>} />
+      <Route path="/live" element={<Protected><LiveRecognition /></Protected>} />
+      <Route path="/register" element={<Protected><RegisterUser /></Protected>} />
+      <Route path="/users" element={<Protected><Users /></Protected>} />
+      <Route path="/attendance" element={<Protected><Attendance /></Protected>} />
+      <Route path="/history" element={<Protected><RecognitionHistory /></Protected>} />
+      <Route path="/unknowns" element={<Protected><UnknownPersons /></Protected>} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <AppRoutes />
+        <Toaster
+          theme="dark"
+          position="top-right"
+          toastOptions={{
+            style: {
+              background: "#121212",
+              border: "1px solid rgba(255,255,255,0.1)",
+              color: "#fff",
+              fontFamily: "JetBrains Mono, monospace",
+              fontSize: 12,
+            },
+          }}
+        />
+      </AuthProvider>
+    </BrowserRouter>
+  );
+}
