@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "https://face-engine-backend.onrender.com";
 export const API = `${BACKEND_URL}/api`;
 export const UPLOADS_BASE = BACKEND_URL;
 
