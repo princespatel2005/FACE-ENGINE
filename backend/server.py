@@ -10,6 +10,7 @@ Modules covered in this single-file service:
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import os
@@ -34,6 +35,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field
 
 from face_engine import cosine_similarity, engine
+from alerts import create_alert, get_alert_recipient
+from cameras import CameraManager
 
 # ------------------------------------------------------------------
 # Configuration
@@ -48,6 +51,9 @@ UPLOAD_ROOT = Path(os.environ.get("UPLOAD_ROOT", "/app/backend/uploads"))
 UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 (UPLOAD_ROOT / "users").mkdir(exist_ok=True)
 (UPLOAD_ROOT / "unknowns").mkdir(exist_ok=True)
+(UPLOAD_ROOT / "cameras").mkdir(exist_ok=True)
+KIOSK_UNKNOWN_ALERT_COOLDOWN_S = int(os.environ.get("KIOSK_UNKNOWN_ALERT_COOLDOWN_S", "60"))
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s")
 logger = logging.getLogger("faceapp")
@@ -56,6 +62,10 @@ client = AsyncIOMotorClient(os.environ["MONGO_URL"])
 db = client[os.environ["DB_NAME"]]
 
 app = FastAPI(title="Smart AI Face Recognition")
+
+camera_manager = CameraManager(UPLOAD_ROOT / "cameras")
+# Cooldown map for unknown alerts per camera → last alert timestamp (isoformat)
+_last_unknown_alert_at: dict = {}
 
 
 # ------------------------------------------------------------------
@@ -142,10 +152,15 @@ class UserOut(UserCreate):
     created_at: str
     embeddings_count: int = 0
     thumbnail_url: Optional[str] = None
+    watchlist_status: str = "normal"  # normal | vip | blocked
 
 
 class EnrollIn(BaseModel):
     images: List[str]  # data URLs or base64 strings
+
+
+class WatchlistIn(BaseModel):
+    status: str  # normal | vip | blocked
 
 
 class RecognizeIn(BaseModel):
@@ -158,9 +173,88 @@ class MultiFrameIn(BaseModel):
     camera_id: Optional[str] = "webcam"
 
 
+class KioskIn(BaseModel):
+    token: str
+    images: List[str]
+    camera_id: Optional[str] = "kiosk"
+
+
+class CameraCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    url: str = Field(min_length=1)         # rtsp://... or http://...
+    type: str = Field(default="rtsp")      # rtsp | ip | usb (usb = frontend only)
+    enabled: bool = True
+
+
+class SettingsIn(BaseModel):
+    alert_email: Optional[EmailStr] = None
+    kiosk_token: Optional[str] = None
+
+
 # ------------------------------------------------------------------
 # Startup: indexes + admin seed + face engine load
 # ------------------------------------------------------------------
+async def _on_camera_detections(cam_id: str, cam_name: str, detections: list, annotated_frame):
+    """Callback invoked by CameraWorker on every processed frame. Runs identity
+    match, logs recognition, sends alerts (unknown / blocked / vip) with cooldown."""
+    if not detections:
+        return
+    # Load gallery once — the manager only calls this every ~1s per camera.
+    mat, ids = await _load_gallery()
+    umap = await _resolve_users(list(set(ids))) if ids else {}
+    recipient = await get_alert_recipient(db)
+
+    for det in detections:
+        emb = det.get("embedding")
+        if not emb:
+            continue
+        emb_np = np.asarray(emb, dtype=np.float32)
+        uid, sim = _best_match(mat, ids, emb_np)
+        if uid and sim >= MATCH_THRESHOLD:
+            u = umap.get(uid, {})
+            await db.recognition_logs.insert_one({
+                "id": str(uuid.uuid4()), "user_id": uid, "camera_id": cam_id,
+                "similarity": float(sim), "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            await _log_attendance_if_needed(uid, cam_id, float(sim))
+            status = u.get("watchlist_status", "normal")
+            if status == "blocked":
+                await create_alert(db, "blocked", f"BLOCKED: {u.get('name')} on {cam_name}",
+                                   cam_id, user_id=uid, similarity=float(sim),
+                                   extra={"name": u.get("name")}, recipient=recipient,
+                                   base_url=PUBLIC_BASE_URL)
+            elif status == "vip":
+                await create_alert(db, "vip", f"VIP arrival: {u.get('name')} on {cam_name}",
+                                   cam_id, user_id=uid, similarity=float(sim),
+                                   extra={"name": u.get("name")}, recipient=recipient,
+                                   base_url=PUBLIC_BASE_URL)
+        else:
+            # Unknown — throttled alert
+            now = datetime.now(timezone.utc)
+            last = _last_unknown_alert_at.get(cam_id)
+            if last and (now - last).total_seconds() < KIOSK_UNKNOWN_ALERT_COOLDOWN_S:
+                continue
+            _last_unknown_alert_at[cam_id] = now
+            # Save current annotated frame as unknown thumbnail
+            unk_id = str(uuid.uuid4())
+            filename = f"{unk_id}.jpg"
+            path = UPLOAD_ROOT / "unknowns" / filename
+            try:
+                import cv2 as _cv2
+                _cv2.imwrite(str(path), annotated_frame)
+            except Exception:
+                pass
+            await db.unknown_people.insert_one({
+                "id": unk_id, "camera_id": cam_id, "similarity": float(sim or 0.0),
+                "image_url": f"/uploads/unknowns/{filename}",
+                "timestamp": now.isoformat(),
+            })
+            await create_alert(db, "unknown", f"Unknown face on {cam_name}", cam_id,
+                               image_url=f"/uploads/unknowns/{filename}",
+                               similarity=float(sim or 0.0), recipient=recipient,
+                               base_url=PUBLIC_BASE_URL)
+
+
 @app.on_event("startup")
 async def on_startup():
     await db.admins.create_index("email", unique=True)
@@ -170,6 +264,8 @@ async def on_startup():
     await db.attendance_logs.create_index("timestamp")
     await db.recognition_logs.create_index("timestamp")
     await db.unknown_people.create_index("timestamp")
+    await db.alerts.create_index("timestamp")
+    await db.cameras.create_index("id", unique=True)
 
     existing = await db.admins.find_one({"email": ADMIN_EMAIL})
     if not existing:
@@ -191,9 +287,20 @@ async def on_startup():
 
     engine.start_background_load()
 
+    # Auto-start enabled cameras
+    async def relaunch():
+        # Small delay so face engine can warm
+        await asyncio.sleep(2)
+        async for cam in db.cameras.find({"enabled": True}):
+            await camera_manager.add(cam, _on_camera_detections)
+
+    asyncio.create_task(relaunch())
+
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    for cid in list(camera_manager.workers.keys()):
+        await camera_manager.stop(cid)
     client.close()
 
 
@@ -255,6 +362,7 @@ def _serialize_user(u: dict, embeddings_count: int = 0) -> dict:
         "created_at": u["created_at"],
         "embeddings_count": embeddings_count,
         "thumbnail_url": u.get("thumbnail_url"),
+        "watchlist_status": u.get("watchlist_status", "normal"),
     }
 
 
@@ -269,6 +377,7 @@ async def create_user(body: UserCreate, admin=Depends(require_role("admin", "ope
         "email": body.email,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "thumbnail_url": None,
+        "watchlist_status": "normal",
     }
     await db.users.insert_one(doc)
     return UserOut(**_serialize_user(doc, 0))
@@ -306,6 +415,18 @@ async def delete_user(user_id: str, admin=Depends(require_role("admin"))):
     if r.deleted_count == 0:
         raise HTTPException(404, "User not found")
     return {"ok": True}
+
+
+@api.patch("/users/{user_id}/watchlist", response_model=UserOut)
+async def set_watchlist(user_id: str, body: WatchlistIn, admin=Depends(require_role("admin", "operator"))):
+    if body.status not in ("normal", "vip", "blocked"):
+        raise HTTPException(400, "status must be normal | vip | blocked")
+    r = await db.users.update_one({"id": user_id}, {"$set": {"watchlist_status": body.status}})
+    if r.matched_count == 0:
+        raise HTTPException(404, "User not found")
+    u = await db.users.find_one({"id": user_id}, {"_id": 0})
+    n = await db.embeddings.count_documents({"user_id": user_id})
+    return UserOut(**_serialize_user(u, n))
 
 
 @api.post("/users/{user_id}/enroll")
@@ -438,6 +559,7 @@ async def recognize(body: RecognizeIn, admin=Depends(get_current_admin)):
                 "name": u.get("name", "Unknown"), "employee_id": u.get("employee_id"),
                 "department": u.get("department"), "similarity": round(sim, 4),
                 "thumbnail_url": u.get("thumbnail_url"),
+                "watchlist_status": u.get("watchlist_status", "normal"),
             })
             await db.recognition_logs.insert_one({
                 "id": str(uuid.uuid4()), "user_id": uid, "camera_id": body.camera_id,
@@ -494,26 +616,44 @@ async def recognize_multi(body: MultiFrameIn, admin=Depends(get_current_admin)):
         avg = float(np.mean(sims))
         umap = await _resolve_users([top_id])
         u = umap.get(top_id, {})
+        watchlist_status = u.get("watchlist_status", "normal")
         await db.recognition_logs.insert_one({
             "id": str(uuid.uuid4()), "user_id": top_id, "camera_id": body.camera_id,
             "similarity": avg, "timestamp": datetime.now(timezone.utc).isoformat(),
             "frames": len(body.images), "votes": top_count,
         })
         new_attendance = await _log_attendance_if_needed(top_id, body.camera_id, avg)
+        recipient = await get_alert_recipient(db)
+        if watchlist_status == "blocked":
+            await create_alert(db, "blocked", f"BLOCKED: {u.get('name')}", body.camera_id,
+                               user_id=top_id, similarity=avg,
+                               extra={"name": u.get("name")}, recipient=recipient,
+                               base_url=PUBLIC_BASE_URL)
+        elif watchlist_status == "vip":
+            await create_alert(db, "vip", f"VIP: {u.get('name')}", body.camera_id,
+                               user_id=top_id, similarity=avg,
+                               extra={"name": u.get("name")}, recipient=recipient,
+                               base_url=PUBLIC_BASE_URL)
         elapsed_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
         return {
             "status": "known", "user_id": top_id, "name": u.get("name"),
             "employee_id": u.get("employee_id"), "department": u.get("department"),
             "thumbnail_url": u.get("thumbnail_url"), "similarity": round(avg, 4),
+            "watchlist_status": watchlist_status,
             "votes": top_count, "frames": len(body.images), "attendance_logged": new_attendance,
             "elapsed_ms": elapsed_ms,
         }
 
-    # Unknown — save best frame
+    # Unknown — save best frame + alert
     unk_id = None
+    best_sim = max((s for _, s in votes), default=0.0)
     if best_frame_b64 is not None:
-        best_sim = max((s for _, s in votes), default=0.0)
         unk_id = await _save_unknown(best_frame_b64, body.camera_id, best_sim)
+    recipient = await get_alert_recipient(db)
+    await create_alert(db, "unknown", "Unknown face detected", body.camera_id,
+                       image_url=f"/uploads/unknowns/{unk_id}.jpg" if unk_id else None,
+                       similarity=float(best_sim), recipient=recipient,
+                       base_url=PUBLIC_BASE_URL)
     elapsed_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
     return {"status": "unknown", "unknown_id": unk_id, "frames": len(body.images), "elapsed_ms": elapsed_ms}
 
@@ -600,7 +740,196 @@ async def stats(admin=Depends(get_current_admin)):
         "weekly_attendance": week,
         "avg_similarity": round(avg_sim, 4),
         "match_threshold": MATCH_THRESHOLD,
+        "cameras_total": await db.cameras.count_documents({}),
+        "cameras_online": sum(1 for w in camera_manager.workers.values() if w.status.get("state") == "running"),
+        "unread_alerts": await db.alerts.count_documents({"read": False}),
     }
+
+
+# ---- Cameras ----
+@api.get("/cameras")
+async def list_cameras(admin=Depends(get_current_admin)):
+    rows = await db.cameras.find({}, {"_id": 0}).sort("name", 1).to_list(200)
+    for r in rows:
+        r["status"] = camera_manager.status(r["id"]).get("state", "stopped")
+        r["fps"] = camera_manager.status(r["id"]).get("fps", 0)
+        r["last_frame_at"] = camera_manager.status(r["id"]).get("last_frame_at")
+        r["error"] = camera_manager.status(r["id"]).get("error")
+    return rows
+
+
+@api.post("/cameras")
+async def create_camera(body: CameraCreate, admin=Depends(require_role("admin", "operator"))):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": body.name,
+        "url": body.url,
+        "type": body.type,
+        "enabled": body.enabled,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.cameras.insert_one(doc)
+    if body.enabled and body.type != "usb":
+        await camera_manager.add(doc, _on_camera_detections)
+    doc.pop("_id", None)
+    doc["status"] = camera_manager.status(doc["id"]).get("state", "stopped")
+    return doc
+
+
+@api.patch("/cameras/{cam_id}")
+async def update_camera(cam_id: str, body: dict, admin=Depends(require_role("admin", "operator"))):
+    updates = {k: v for k, v in body.items() if k in ("name", "url", "enabled")}
+    if not updates:
+        raise HTTPException(400, "Nothing to update")
+    r = await db.cameras.update_one({"id": cam_id}, {"$set": updates})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Camera not found")
+    cam = await db.cameras.find_one({"id": cam_id}, {"_id": 0})
+    # Restart worker with new settings
+    await camera_manager.stop(cam_id)
+    if cam.get("enabled") and cam.get("type") != "usb":
+        await camera_manager.add(cam, _on_camera_detections)
+    return cam
+
+
+@api.delete("/cameras/{cam_id}")
+async def delete_camera(cam_id: str, admin=Depends(require_role("admin"))):
+    await camera_manager.stop(cam_id)
+    r = await db.cameras.delete_one({"id": cam_id})
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Camera not found")
+    return {"ok": True}
+
+
+@api.get("/cameras/{cam_id}/status")
+async def camera_status(cam_id: str, admin=Depends(get_current_admin)):
+    return camera_manager.status(cam_id)
+
+
+# ---- Alerts ----
+@api.get("/alerts")
+async def list_alerts(limit: int = 50, since: Optional[str] = None, admin=Depends(get_current_admin)):
+    q = {}
+    if since:
+        q["timestamp"] = {"$gt": since}
+    return await db.alerts.find(q, {"_id": 0}).sort("timestamp", -1).to_list(limit)
+
+
+@api.post("/alerts/{alert_id}/read")
+async def mark_alert_read(alert_id: str, admin=Depends(get_current_admin)):
+    r = await db.alerts.update_one({"id": alert_id}, {"$set": {"read": True}})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    return {"ok": True}
+
+
+@api.post("/alerts/read-all")
+async def mark_all_read(admin=Depends(get_current_admin)):
+    await db.alerts.update_many({"read": False}, {"$set": {"read": True}})
+    return {"ok": True}
+
+
+# ---- Settings (notifications + kiosk token) ----
+@api.get("/settings")
+async def get_settings(admin=Depends(get_current_admin)):
+    s = await db.settings.find_one({"_id": "notifications"})
+    if not s:
+        return {"alert_email": os.environ.get("ALERT_TO", ""), "kiosk_token": ""}
+    return {
+        "alert_email": s.get("alert_email", ""),
+        "kiosk_token": s.get("kiosk_token", ""),
+    }
+
+
+@api.patch("/settings")
+async def update_settings(body: SettingsIn, admin=Depends(require_role("admin"))):
+    updates = {}
+    if body.alert_email is not None:
+        updates["alert_email"] = body.alert_email
+    if body.kiosk_token is not None:
+        updates["kiosk_token"] = body.kiosk_token
+    if not updates:
+        return {"ok": True}
+    await db.settings.update_one({"_id": "notifications"}, {"$set": updates}, upsert=True)
+    return {"ok": True, **updates}
+
+
+@api.post("/settings/test-email")
+async def send_test_email(admin=Depends(require_role("admin"))):
+    recipient = await get_alert_recipient(db)
+    if not recipient:
+        raise HTTPException(400, "No alert_email configured. Add one in Settings first.")
+    from alerts import send_email as _send
+    email_id = await _send(recipient, "Sentinel FR — test alert",
+                           "<p>If you can read this, Resend delivery is working. 🎯</p>")
+    if not email_id:
+        raise HTTPException(502, "Resend rejected the send. Check API key & recipient (sandbox only sends to Resend account owner).")
+    return {"ok": True, "email_id": email_id, "recipient": recipient}
+
+
+# ---- Kiosk ----
+@api.post("/kiosk/verify")
+async def kiosk_verify(body: KioskIn):
+    """Public endpoint (no auth) — validated by kiosk_token stored in settings."""
+    s = await db.settings.find_one({"_id": "notifications"})
+    if not s or not s.get("kiosk_token") or s["kiosk_token"] != body.token:
+        raise HTTPException(401, "Invalid kiosk token")
+    if not engine.status()["ready"]:
+        raise HTTPException(503, "Face engine not ready")
+    if not body.images:
+        raise HTTPException(400, "images required")
+
+    mat, ids = await _load_gallery()
+    votes = []
+    best_frame_b64 = None
+    for img_b64 in body.images:
+        try:
+            img = engine.decode_base64_image(img_b64)
+        except Exception:
+            continue
+        dets = engine.analyze(img)
+        if not dets:
+            continue
+        det = max(dets, key=lambda d: (d.bbox[2] - d.bbox[0]) * (d.bbox[3] - d.bbox[1]))
+        q = engine.quality_check(img, det.bbox)
+        if q:
+            continue
+        uid, sim = _best_match(mat, ids, det.embedding)
+        votes.append((uid if sim >= MATCH_THRESHOLD else None, sim))
+        if best_frame_b64 is None:
+            best_frame_b64 = img_b64
+
+    if not votes:
+        return {"status": "no_face"}
+
+    counter = Counter([v[0] for v in votes])
+    top_id, top_count = counter.most_common(1)[0]
+    if top_id and top_count / len(votes) >= 0.4:
+        sims = [s for u, s in votes if u == top_id]
+        avg = float(np.mean(sims))
+        umap = await _resolve_users([top_id])
+        u = umap.get(top_id, {})
+        await db.recognition_logs.insert_one({
+            "id": str(uuid.uuid4()), "user_id": top_id, "camera_id": body.camera_id,
+            "similarity": avg, "timestamp": datetime.now(timezone.utc).isoformat(),
+            "frames": len(body.images), "votes": top_count, "kiosk": True,
+        })
+        new_att = await _log_attendance_if_needed(top_id, body.camera_id, avg)
+        return {
+            "status": "known", "name": u.get("name"), "employee_id": u.get("employee_id"),
+            "department": u.get("department"), "thumbnail_url": u.get("thumbnail_url"),
+            "similarity": round(avg, 4), "watchlist_status": u.get("watchlist_status", "normal"),
+            "attendance_logged": new_att,
+        }
+
+    if best_frame_b64:
+        best_sim = max((s for _, s in votes), default=0.0)
+        await _save_unknown(best_frame_b64, body.camera_id, best_sim)
+        recipient = await get_alert_recipient(db)
+        await create_alert(db, "unknown", f"Kiosk unknown on {body.camera_id}",
+                           body.camera_id, similarity=float(best_sim),
+                           recipient=recipient, base_url=PUBLIC_BASE_URL)
+    return {"status": "unknown"}
 
 
 # ------------------------------------------------------------------

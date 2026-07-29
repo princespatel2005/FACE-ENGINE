@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, UPLOADS_BASE } from "@/lib/api";
-import { Users, UserCheck, Warning, Cpu, TrendUp, ChartBar } from "@phosphor-icons/react";
+import { Users, UserCheck, Warning, Cpu, TrendUp, ChartBar, Broadcast, Bell } from "@phosphor-icons/react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from "recharts";
 import PageHeader from "@/components/PageHeader";
 
@@ -49,10 +49,12 @@ export default function Dashboard() {
         subtitle="Live operational overview of the identification network"
       />
       <div className="px-8 pb-10 space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           <StatCard testid="stat-users" icon={Users} label="Enrolled identities" value={stats?.total_users ?? "—"} sub="Total in gallery" />
           <StatCard testid="stat-attendance" icon={UserCheck} label="Today's attendance" value={stats?.today_attendance ?? "—"} accent="#00FF66" sub="Unique matches" />
           <StatCard testid="stat-unknown" icon={Warning} label="Unknown faces" value={stats?.total_unknown ?? "—"} accent="#FF3B30" sub="Awaiting review" />
+          <StatCard testid="stat-alerts" icon={Bell} label="Unread alerts" value={stats?.unread_alerts ?? "—"} accent="#FFFF00" sub="Since last check" />
+          <StatCard testid="stat-cameras" icon={Broadcast} label="Cameras online" value={`${stats?.cameras_online ?? 0}/${stats?.cameras_total ?? 0}`} accent="#00FF66" sub="Active streams" />
           <StatCard testid="stat-engine" icon={Cpu} label="Face engine" value={engineOk ? "ONLINE" : engine?.loading ? "LOADING" : "OFFLINE"} accent={engineOk ? "#00FF66" : engine?.loading ? "#FFFF00" : "#FF3B30"} sub={engine?.model || "—"} />
         </div>
 

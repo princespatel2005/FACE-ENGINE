@@ -114,7 +114,17 @@ export default function LiveRecognition() {
             const scaleX = 100 / v.videoWidth;
             const scaleY = 100 / v.videoHeight;
             const [x1, y1, x2, y2] = d.bbox;
-            const color = d.status === "known" ? "#00FF66" : d.status === "unknown" ? "#FF3B30" : "#FFFF00";
+            const isBlocked = d.watchlist_status === "blocked";
+            const isVip = d.watchlist_status === "vip";
+            const color = isBlocked ? "#FF3B30"
+              : isVip ? "#FFD400"
+              : d.status === "known" ? "#00FF66"
+              : d.status === "unknown" ? "#FF3B30" : "#FFFF00";
+            const label = isBlocked ? `⚠ BLOCKED · ${d.name}`
+              : isVip ? `★ VIP · ${d.name}`
+              : d.status === "known" ? `${d.name} • ${(d.similarity * 100).toFixed(0)}%`
+              : d.status === "unknown" ? "UNKNOWN"
+              : (d.message || "LOW QUALITY");
             return (
               <div key={i}
                 style={{
@@ -122,13 +132,11 @@ export default function LiveRecognition() {
                   left: `${x1 * scaleX}%`, top: `${y1 * scaleY}%`,
                   width: `${(x2 - x1) * scaleX}%`, height: `${(y2 - y1) * scaleY}%`,
                   border: `2px solid ${color}`,
-                  boxShadow: `0 0 20px ${color}55`,
+                  boxShadow: `0 0 24px ${color}66`,
                 }}
               >
-                <div className="absolute -top-6 left-0 px-2 py-0.5 text-[10px] font-mono uppercase tracking-widest" style={{ background: color, color: "#000" }}>
-                  {d.status === "known" ? `${d.name} • ${(d.similarity * 100).toFixed(0)}%`
-                    : d.status === "unknown" ? "UNKNOWN"
-                    : (d.message || "LOW QUALITY")}
+                <div className="absolute -top-6 left-0 px-2 py-0.5 text-[10px] font-mono uppercase tracking-widest whitespace-nowrap" style={{ background: color, color: "#000" }}>
+                  {label}
                 </div>
               </div>
             );
@@ -152,8 +160,20 @@ export default function LiveRecognition() {
 
           {result?.status === "known" && (
             <div data-testid="result-known" className="mt-6">
-              <div className="border border-[#00FF66]/40 bg-[#00FF66]/5 rounded-md p-4">
-                <div className="text-xs text-[#00FF66] font-mono tracking-widest uppercase">Identity confirmed</div>
+              <div className={`border rounded-md p-4 ${
+                result.watchlist_status === "blocked" ? "border-[#FF3B30]/60 bg-[#FF3B30]/10" :
+                result.watchlist_status === "vip" ? "border-[#FFD400]/60 bg-[#FFD400]/10" :
+                "border-[#00FF66]/40 bg-[#00FF66]/5"
+              }`}>
+                <div className={`text-xs font-mono tracking-widest uppercase ${
+                  result.watchlist_status === "blocked" ? "text-[#FF3B30]" :
+                  result.watchlist_status === "vip" ? "text-[#FFD400]" :
+                  "text-[#00FF66]"
+                }`}>
+                  {result.watchlist_status === "blocked" ? "⚠ BLOCKED IDENTITY" :
+                   result.watchlist_status === "vip" ? "★ VIP IDENTITY" :
+                   "Identity confirmed"}
+                </div>
                 <div className="font-heading text-2xl mt-2">{result.name}</div>
                 <div className="text-xs text-white/50 font-mono mt-1">{result.employee_id || "—"} · {result.department || "—"}</div>
                 <div className="mt-4 grid grid-cols-2 gap-4 text-xs font-mono">

@@ -11,9 +11,14 @@ import Users from "@/pages/Users";
 import Attendance from "@/pages/Attendance";
 import RecognitionHistory from "@/pages/RecognitionHistory";
 import UnknownPersons from "@/pages/UnknownPersons";
+import Cameras from "@/pages/Cameras";
+import Settings from "@/pages/Settings";
+import Kiosk from "@/pages/Kiosk";
+import useAlertsPoller from "@/hooks/useAlertsPoller";
 
 function Protected({ children }) {
   const { user, initialized } = useAuth();
+  useAlertsPoller(!!user);
   if (!initialized) {
     return (
       <div className="min-h-screen bg-[#0A0A0A] text-white/50 font-mono flex items-center justify-center text-sm">
@@ -29,13 +34,16 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/kiosk" element={<Kiosk />} />
       <Route path="/" element={<Protected><Dashboard /></Protected>} />
       <Route path="/live" element={<Protected><LiveRecognition /></Protected>} />
+      <Route path="/cameras" element={<Protected><Cameras /></Protected>} />
       <Route path="/register" element={<Protected><RegisterUser /></Protected>} />
       <Route path="/users" element={<Protected><Users /></Protected>} />
       <Route path="/attendance" element={<Protected><Attendance /></Protected>} />
       <Route path="/history" element={<Protected><RecognitionHistory /></Protected>} />
       <Route path="/unknowns" element={<Protected><UnknownPersons /></Protected>} />
+      <Route path="/settings" element={<Protected><Settings /></Protected>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
