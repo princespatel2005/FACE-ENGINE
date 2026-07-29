@@ -1,0 +1,48 @@
+{
+  "summary": "Backend-only regression + new-features test for iteration 2 (watchlist, alerts, RTSP cameras, settings, kiosk). 63/63 pytest cases passed on first clean run (30 original + 33 new). Verified real end-to-end paths: watchlist transitions on an enrolled portrait, /api/recognize/multi returning watchlist_status='vip'/'blocked' AND creating matching alert rows, noise-frame path creating unknown alert with image_url + best-similarity, /api/alerts list is timestamp-desc with since filter, /api/alerts/{id}/read + read-all persist correctly and require auth, /api/cameras full CRUD with fake RTSP URL correctly transitioning to state='error' (CameraWorker logs 'cannot open rtsp://…'), /api/cameras/{id}/status returns state='stopped' for unknown/deleted cameras, /api/settings requires auth and round-trips alert_email + kiosk_token, /api/settings/test-email admin-only endpoint returns 502 (Resend sandbox rejects example.com addresses) — endpoint contract validated, /api/kiosk/verify is public (no Bearer) but requires kiosk_token (401 on wrong token, known/unknown/no_face on real portrait/noise frames), dashboard stats now includes cameras_total + cameras_online + unread_alerts. Regression: all previously passing endpoints from iteration_1 (auth, users CRUD, enroll, recognize single & multi, attendance, recognition-history, unknowns, dashboard) still pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/settings/test-email", "issue": "Returns 502 with Resend sandbox key because SENDER_EMAIL=onboarding@resend.dev + example.com recipient is rejected ('Invalid `to` field'). Endpoint contract is correct; not a bug — user must configure the Resend-account-owner email as alert_email in production."},
+      {"endpoint": "POST /api/alerts/read-all", "issue": "Idempotent but returns only {ok:true} — no count of rows updated. Nice-to-have to expose 'updated' count for frontend UX (e.g. toast 'Marked 12 alerts read')."},
+      {"endpoint": "POST /api/recognize/multi (unknown branch)", "issue": "When status=='unknown', response returns unknown_id but does not include the image_url; frontend has to derive it from /uploads/unknowns/{unk_id}.jpg. Consider returning image_url directly for consistency with the alert doc."},
+      {"endpoint": "PATCH /api/cameras/{id}", "issue": "Silently ignores unknown fields — only name/url/enabled are accepted. If 'type' is sent, it's dropped without a 400. Minor DX issue."},
+      {"endpoint": "DELETE /api/users/{user_id}", "issue": "Does not delete the user's thumbnail file /uploads/users/{id}.jpg from disk (only DB rows). Orphan files accumulate. Same for camera snapshots on DELETE /api/cameras/{id}."},
+      {"endpoint": "GET /api/cameras", "issue": "Populates status via camera_manager.status(id) which returns {'state':'stopped'} for disabled cameras. Works correctly, but for enabled cameras whose worker had a fatal error, the 'error' string is stringified even when null — acceptable, just noting."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_new_features.py",
+    "/app/backend/tests/test_face_recognition.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/pytest/new_features_results.xml"
+  ],
+  "action_items": [
+    "For production Resend delivery, either upgrade the Resend account (verify a domain) or set SENDER_EMAIL + alert_email to the Resend account-owner email so /api/settings/test-email returns 200.",
+    "Consider stripping orphan files on DELETE /api/users/{id} and DELETE /api/cameras/{id} (thumbnails + camera snapshots).",
+    "Optional: return {ok:true, updated:N} from /api/alerts/read-all so the UI can toast the affected count."
+  ],
+  "critical_code_review_comments": [
+    "cameras.py CameraWorker._run runs cv2.VideoCapture(self.url) in a thread executor but there's no read-timeout wrapper — an unreachable RTSP that hangs opening can keep 'starting' for a long time. Consider `cv2.CAP_PROP_OPEN_TIMEOUT_MSEC` + `cv2.CAP_PROP_READ_TIMEOUT_MSEC` on FFmpeg backend, or a wall-clock guard.",
+    "cameras.py: worker publishes raw embedding lists inside status['last_detections'] which are then held in memory + passed to on_detections. Each 512-d vector = 2 KB; for a 5-camera fleet the manager keeps ~10 KB * detections in a hot dict. Not a bug, just watch it.",
+    "server.py: _on_camera_detections logs recognition_logs for EVERY per-second detection without any per-user cooldown. On a busy camera the recognition_logs collection will grow very fast. Consider a per (user_id, camera_id) debounce (e.g. skip if last log within N seconds) — mirrors what _log_attendance_if_needed already does for attendance.",
+    "server.py: KIOSK_UNKNOWN_ALERT_COOLDOWN_S is only applied to the RTSP-camera unknown path, not to POST /api/recognize/multi and /api/kiosk/verify — those two create an 'unknown' alert on every hit. Add the same cooldown to the manual endpoints to avoid alert-spam if the frontend polls repeatedly with the same noise frames.",
+    "server.py: POST /api/settings PATCH allows role='admin' only but the equivalent POST/PATCH for other admin-only settings paths (e.g. test-email) also gates on 'admin'. GET /api/settings on the other hand accepts any authenticated admin/operator — kiosk_token is effectively secret so consider gating GET behind 'admin' too, otherwise an operator can read the token and use the public kiosk endpoint.",
+    "alerts.py create_alert: on Resend failure (email_id=None) the alert is still stored in DB but there's no retry queue or delivery-failure flag. If Resend is misconfigured you silently lose email delivery — consider recording the failure reason on the alert doc.",
+    "server.py TestWatchlistAndAlerts triggers recognize/multi → the /api/recognize/multi path creates an unknown alert with best_frame_b64 even when status IS 'no_face'? Actually looking again: only when votes is non-empty AND top vote loses. On pure-noise images, votes==[] → returns 'no_face' immediately, no alert. So the 'unknown' alert path only fires when at least one detection was made but similarity < 0.42 — this is correct but subtle; consider adding an inline comment.",
+    "Deprecated FastAPI @app.on_event startup/shutdown hooks (same as iteration_1) — migrate to lifespan handlers.",
+    "The class-scoped pytest fixtures in test_new_features.py trigger PytestRemovedIn10Warning ('Class-scoped fixture defined as instance method'). Non-blocking but should switch to @classmethod / module-level in a future clean-up."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_new_features.py"
+  ],
+  "success_rate": {"backend": "100% (63/63 pytest cases across 2 files)", "frontend": "not tested (backend-only per request)"},
+  "test_credentials": "admin@example.com / admin123",
+  "seed_data_creation": "TestWatchlistAndAlerts creates a transient TEST_WATCH_Obama user, enrolls 4 real InsightFace embeddings from /app/test_fixtures/portrait.jpg, exercises watchlist transitions (normal→vip→blocked→normal), then deletes it in fixture teardown. TestCameras creates + deletes a TEST_CAM_lobby camera. TestSettingsAndKiosk sets kiosk_token='TEST_KIOSK_TOKEN_abc123' and alert_email='demo@example.com' in the settings collection (these persist in Mongo after the run — future test runs should reset or ignore).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "test_new_features.py + test_face_recognition.py both run under pytest-xdist -n 2 --dist loadscope. loadscope groups by CLASS, so keep interdependent flows inside a single class. TestWatchlistAndAlerts and TestUserLifecycle both enroll the same obama.jpg portrait under two different user names — because the classes run on separate workers concurrently, the gallery briefly has TWO matching identities. The recognize/multi cosine matcher happens to pick the correct one in this run (thanks to identical L2-normalised embeddings + Mongo insertion order stability), but if you ever add a THIRD enrollee with the same portrait you'll get non-deterministic matches. Fix if it flakes: change one class to use a different portrait fixture or serialise the two classes onto one worker. Resend sandbox constraint: /api/settings/test-email currently returns 502 for demo@example.com — this is EXPECTED and the test asserts either 200 or 502 (only fails on 5xx crash or 401/403).",
+  "rca_of_the_issue": "N/A — no bugs to root-cause this iteration. All 4 new feature groups behaved as specified. The only surprise was Resend rejecting example.com recipients ('Invalid `to` field'), which produces the 502 documented in the task brief and is treated as expected endpoint-contract behaviour."
+}

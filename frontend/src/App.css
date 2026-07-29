@@ -1,0 +1,14 @@
+.App {
+    min-height: 100vh;
+    background: #0A0A0A;
+    color: #fff;
+}
+
+/* Scrollbar tuned to dark theme */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #0A0A0A; }
+::-webkit-scrollbar-thumb { background: #1A1A1A; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #2a2a2a; }
+
+/* Text selection */
+::selection { background: #00FF66; color: #000; }
