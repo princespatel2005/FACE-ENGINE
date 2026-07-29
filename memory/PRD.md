@@ -22,9 +22,16 @@ Build a production-ready AI Face Recognition Web Application (Sentinel FR). Real
 - ✅ Multi-pose enrollment endpoint with per-frame quality checks (blur/brightness/size/margin)
 - ✅ Single-frame `/api/recognize` with per-face bbox + status (known/unknown/low_quality) and inline recognition logs
 - ✅ Multi-frame `/api/recognize/multi` with 15-frame majority vote, attendance auto-log (once/day/user), unknown face capture
-- ✅ Dashboard stats: enrolled count, today's attendance, unknowns, engine status, weekly bar chart, avg similarity, threshold
+- ✅ Dashboard stats: enrolled count, today's attendance, unknowns, alerts, cameras online, engine, weekly chart
 - ✅ Frontend: dark security-command-center UI (Chivo/JetBrains Mono), sidebar layout, live camera preview with color-coded bounding boxes and live label, 7-pose enrollment wizard
 - ✅ 30/30 backend pytest cases passing (real InsightFace embeddings, self-match, majority voting, unknown flow, 401 gating)
+
+## Iteration 2 (2026-07-29)
+- ✅ **RTSP / IP Cameras**: `CameraManager` + per-camera `CameraWorker` asyncio task reads OpenCV `VideoCapture` every ~1s, runs recognition, saves annotated JPEG, triggers alerts. Endpoints: `GET/POST/PATCH/DELETE /api/cameras`, `GET /api/cameras/{id}/status`, snapshot served at `/uploads/cameras/{id}.jpg`. Frontend Cameras page with add/enable/disable/delete + live snapshot grid.
+- ✅ **Unknown / VIP / Blocked Alerts**: `alerts.py` sends via Resend (`resend>=2.0.0`) with rich HTML templates + stores alert docs in Mongo. `/api/alerts`, `/api/alerts/{id}/read`, `/api/alerts/read-all`. Frontend polls every 4s and fires sonner toasts + browser Notification API notifications.
+- ✅ **Watchlist Boost**: users have `watchlist_status` (normal | vip | blocked). `PATCH /api/users/{id}/watchlist`. Live Recognition + Kiosk color-code bounding boxes and result cards (gold VIP, red blocked). Recognize/multi returns `watchlist_status` and creates matching alert.
+- ✅ **Kiosk Mode**: public `/kiosk?token=...` page, no login required. `POST /api/kiosk/verify` gated by kiosk_token stored in settings. Auto-loops 12-frame verification every 6.5s. Settings page has token generator + shareable URL.
+- ✅ 63/63 backend pytest cases passing (30 original + 33 new for iteration 2).
 
 ## Deferred / Backlog (P1)
 - Camera Management page (RTSP/IP camera streams beyond USB webcam)
