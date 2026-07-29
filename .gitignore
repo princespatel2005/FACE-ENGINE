@@ -113,3 +113,17 @@ frontend/.env
 backend/.env.example
 backend/.example.env
 
+.env
+.env.*
+*.env
+
+.env.example
+.example.env
+
+backend/.env
+backend/.env.example
+backend/.example.env
+
+frontend/.env
+frontend/.env.example
+frontend/.example.env
