@@ -14,6 +14,8 @@ import UnknownPersons from "@/pages/UnknownPersons";
 import Cameras from "@/pages/Cameras";
 import Settings from "@/pages/Settings";
 import Kiosk from "@/pages/Kiosk";
+import Reports from "@/pages/Reports";
+import CustomerDetail from "@/pages/CustomerDetail";
 import useAlertsPoller from "@/hooks/useAlertsPoller";
 
 function Protected({ children }) {
@@ -40,7 +42,9 @@ function AppRoutes() {
       <Route path="/cameras" element={<Protected><Cameras /></Protected>} />
       <Route path="/register" element={<Protected><RegisterUser /></Protected>} />
       <Route path="/users" element={<Protected><Users /></Protected>} />
+      <Route path="/customers/:id" element={<Protected><CustomerDetail /></Protected>} />
       <Route path="/attendance" element={<Protected><Attendance /></Protected>} />
+      <Route path="/reports" element={<Protected><Reports /></Protected>} />
       <Route path="/history" element={<Protected><RecognitionHistory /></Protected>} />
       <Route path="/unknowns" element={<Protected><UnknownPersons /></Protected>} />
       <Route path="/settings" element={<Protected><Settings /></Protected>} />

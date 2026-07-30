@@ -37,6 +37,7 @@ from pydantic import BaseModel, EmailStr, Field
 from face_engine import cosine_similarity, engine
 from alerts import create_alert, get_alert_recipient
 from cameras import CameraManager
+from digest import compose_digest, render_digest_html, scheduler_loop
 
 # ------------------------------------------------------------------
 # Configuration
@@ -145,6 +146,12 @@ class UserCreate(BaseModel):
     department: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[EmailStr] = None
+    # Retail additions
+    gender: Optional[str] = None                # M | F | Other
+    dob: Optional[str] = None                   # ISO date
+    address: Optional[str] = None
+    notes: Optional[str] = None
+    loyalty_points: Optional[int] = 0
 
 
 class UserOut(UserCreate):
@@ -152,7 +159,36 @@ class UserOut(UserCreate):
     created_at: str
     embeddings_count: int = 0
     thumbnail_url: Optional[str] = None
-    watchlist_status: str = "normal"  # normal | vip | blocked
+    watchlist_status: str = "normal"
+    total_visits: int = 0
+    lifetime_spend: float = 0.0
+    last_visit_at: Optional[str] = None
+
+
+class RegisterFromUnknownIn(BaseModel):
+    unknown_id: str
+    name: str = Field(min_length=1, max_length=100)
+    phone: Optional[str] = None
+    email: Optional[EmailStr] = None
+    gender: Optional[str] = None
+    address: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class PurchaseLine(BaseModel):
+    product: str
+    quantity: float = 1
+    price: float = 0
+    discount: float = 0
+
+
+class PurchaseCreate(BaseModel):
+    user_id: str
+    invoice_number: Optional[str] = None
+    items: List[PurchaseLine] = []
+    total: float = 0
+    payment_mode: Optional[str] = "cash"
+    date: Optional[str] = None                  # ISO; defaults to now
 
 
 class EnrollIn(BaseModel):
@@ -295,6 +331,7 @@ async def on_startup():
             await camera_manager.add(cam, _on_camera_detections)
 
     asyncio.create_task(relaunch())
+    asyncio.create_task(scheduler_loop(db))
 
 
 @app.on_event("shutdown")
@@ -359,10 +396,18 @@ def _serialize_user(u: dict, embeddings_count: int = 0) -> dict:
         "department": u.get("department"),
         "phone": u.get("phone"),
         "email": u.get("email"),
+        "gender": u.get("gender"),
+        "dob": u.get("dob"),
+        "address": u.get("address"),
+        "notes": u.get("notes"),
+        "loyalty_points": int(u.get("loyalty_points") or 0),
         "created_at": u["created_at"],
         "embeddings_count": embeddings_count,
         "thumbnail_url": u.get("thumbnail_url"),
         "watchlist_status": u.get("watchlist_status", "normal"),
+        "total_visits": int(u.get("total_visits") or 0),
+        "lifetime_spend": float(u.get("lifetime_spend") or 0),
+        "last_visit_at": u.get("last_visit_at"),
     }
 
 
@@ -375,12 +420,35 @@ async def create_user(body: UserCreate, admin=Depends(require_role("admin", "ope
         "department": body.department,
         "phone": body.phone,
         "email": body.email,
+        "gender": body.gender,
+        "dob": body.dob,
+        "address": body.address,
+        "notes": body.notes,
+        "loyalty_points": body.loyalty_points or 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "thumbnail_url": None,
         "watchlist_status": "normal",
+        "total_visits": 0,
+        "lifetime_spend": 0.0,
+        "last_visit_at": None,
     }
     await db.users.insert_one(doc)
     return UserOut(**_serialize_user(doc, 0))
+
+
+@api.patch("/users/{user_id}", response_model=UserOut)
+async def update_user(user_id: str, body: dict, admin=Depends(require_role("admin", "operator"))):
+    allowed = {"name", "employee_id", "department", "phone", "email",
+               "gender", "dob", "address", "notes", "loyalty_points"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if not updates:
+        raise HTTPException(400, "Nothing to update")
+    r = await db.users.update_one({"id": user_id}, {"$set": updates})
+    if r.matched_count == 0:
+        raise HTTPException(404, "User not found")
+    u = await db.users.find_one({"id": user_id}, {"_id": 0})
+    n = await db.embeddings.count_documents({"user_id": user_id})
+    return UserOut(**_serialize_user(u, n))
 
 
 @api.get("/users", response_model=List[UserOut])
@@ -504,7 +572,8 @@ def _best_match(mat, ids, embedding: np.ndarray):
 
 
 async def _log_attendance_if_needed(user_id: str, camera_id: str, similarity: float):
-    """Create attendance record once per user per calendar day."""
+    """Create attendance record once per user per calendar day. Also increments
+    user.total_visits + updates last_visit_at (retail semantics)."""
     now = datetime.now(timezone.utc)
     start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     existing = await db.attendance_logs.find_one({"user_id": user_id, "timestamp": {"$gte": start_of_day}})
@@ -517,6 +586,10 @@ async def _log_attendance_if_needed(user_id: str, camera_id: str, similarity: fl
         "similarity": similarity,
         "timestamp": now.isoformat(),
     })
+    await db.users.update_one(
+        {"id": user_id},
+        {"$inc": {"total_visits": 1}, "$set": {"last_visit_at": now.isoformat()}},
+    )
     return True
 
 
@@ -868,6 +941,188 @@ async def send_test_email(admin=Depends(require_role("admin"))):
 
 
 # ---- Kiosk ----
+# ---- Register from unknown (retail workflow) ----
+@api.post("/register-from-unknown", response_model=UserOut)
+async def register_from_unknown(body: RegisterFromUnknownIn, admin=Depends(require_role("admin", "operator"))):
+    """Convert an unknown-face capture into a full customer.
+    Reuses the saved unknown image + generates an embedding from it."""
+    unk = await db.unknown_people.find_one({"id": body.unknown_id})
+    if not unk:
+        raise HTTPException(404, "Unknown record not found")
+    if not engine.status()["ready"]:
+        raise HTTPException(503, "Face engine not ready")
+
+    # Locate source file
+    from pathlib import Path as _P
+    src = _P(UPLOAD_ROOT) / unk["image_url"].lstrip("/").replace("uploads/", "", 1)
+    if not src.exists():
+        raise HTTPException(410, "Unknown image no longer available")
+    import cv2 as _cv2
+    img = _cv2.imread(str(src))
+    if img is None:
+        raise HTTPException(500, "Cannot decode unknown image")
+    dets = engine.analyze(img)
+    if not dets:
+        raise HTTPException(422, "No face detected on that capture — try a different unknown.")
+    det = max(dets, key=lambda d: (d.bbox[2] - d.bbox[0]) * (d.bbox[3] - d.bbox[1]))
+
+    user_id = str(uuid.uuid4())
+    doc = {
+        "id": user_id, "name": body.name, "phone": body.phone, "email": body.email,
+        "gender": body.gender, "address": body.address, "notes": body.notes,
+        "employee_id": None, "department": None, "dob": None, "loyalty_points": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "thumbnail_url": f"/uploads/users/{user_id}.jpg",
+        "watchlist_status": "normal",
+        "total_visits": 0, "lifetime_spend": 0.0, "last_visit_at": None,
+    }
+    await db.users.insert_one(doc)
+
+    # Save embedding + copy image as user thumbnail
+    await db.embeddings.insert_one({
+        "id": str(uuid.uuid4()), "user_id": user_id,
+        "embedding": det.embedding.tolist(), "det_score": det.det_score,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    dst = _P(UPLOAD_ROOT) / "users" / f"{user_id}.jpg"
+    dst.write_bytes(src.read_bytes())
+
+    # Delete the unknown record (customer is now known)
+    await db.unknown_people.delete_one({"id": body.unknown_id})
+
+    return UserOut(**_serialize_user(doc, 1))
+
+
+# ---- Purchases ----
+@api.get("/purchases")
+async def list_purchases(user_id: Optional[str] = None, limit: int = 100,
+                         admin=Depends(get_current_admin)):
+    q = {"user_id": user_id} if user_id else {}
+    rows = await db.purchases.find(q, {"_id": 0}).sort("date", -1).to_list(limit)
+    if not user_id:
+        umap = await _resolve_users([r["user_id"] for r in rows])
+        for r in rows:
+            u = umap.get(r["user_id"], {})
+            r["customer_name"] = u.get("name", "Unknown")
+    return rows
+
+
+@api.post("/purchases")
+async def create_purchase(body: PurchaseCreate, admin=Depends(require_role("admin", "operator"))):
+    u = await db.users.find_one({"id": body.user_id})
+    if not u:
+        raise HTTPException(404, "User not found")
+    total = float(body.total) if body.total else sum((li.price * li.quantity - li.discount) for li in body.items)
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": body.user_id,
+        "invoice_number": body.invoice_number or f"INV-{int(datetime.now(timezone.utc).timestamp())}",
+        "items": [li.model_dump() for li in body.items],
+        "total": float(total),
+        "payment_mode": body.payment_mode or "cash",
+        "date": body.date or datetime.now(timezone.utc).isoformat(),
+    }
+    await db.purchases.insert_one(doc)
+    await db.users.update_one(
+        {"id": body.user_id},
+        {"$inc": {"lifetime_spend": total, "loyalty_points": int(total // 10)}},
+    )
+    doc.pop("_id", None)
+    return doc
+
+
+@api.delete("/purchases/{purchase_id}")
+async def delete_purchase(purchase_id: str, admin=Depends(require_role("admin"))):
+    r = await db.purchases.find_one({"id": purchase_id})
+    if not r:
+        raise HTTPException(404, "Not found")
+    await db.purchases.delete_one({"id": purchase_id})
+    await db.users.update_one(
+        {"id": r["user_id"]},
+        {"$inc": {"lifetime_spend": -float(r.get("total", 0)), "loyalty_points": -int(float(r.get("total", 0)) // 10)}},
+    )
+    return {"ok": True}
+
+
+# ---- Reports ----
+@api.get("/reports/overview")
+async def report_overview(days: int = 7, admin=Depends(get_current_admin)):
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(days=days)).isoformat()
+    total_visits = await db.attendance_logs.count_documents({"timestamp": {"$gte": start}})
+    unique = len(await db.attendance_logs.distinct("user_id", {"timestamp": {"$gte": start}}))
+    unknown = await db.unknown_people.count_documents({"timestamp": {"$gte": start}})
+    vip_ids = [u["id"] async for u in db.users.find({"watchlist_status": "vip"}, {"id": 1})]
+    vip_visits = await db.attendance_logs.count_documents(
+        {"user_id": {"$in": vip_ids}, "timestamp": {"$gte": start}}
+    ) if vip_ids else 0
+
+    # Peak hour histogram
+    pipe = [
+        {"$match": {"timestamp": {"$gte": start}}},
+        {"$project": {"hour": {"$hour": {"$dateFromString": {"dateString": "$timestamp"}}}}},
+        {"$group": {"_id": "$hour", "count": {"$sum": 1}}},
+        {"$sort": {"_id": 1}},
+    ]
+    peak = await db.attendance_logs.aggregate(pipe).to_list(24)
+    peak_hours = [{"hour": r["_id"], "count": r["count"]} for r in peak]
+
+    return {
+        "days": days,
+        "total_visits": total_visits,
+        "unique_visitors": unique,
+        "unknown": unknown,
+        "vip_visits": vip_visits,
+        "peak_hours": peak_hours,
+    }
+
+
+@api.get("/reports/top-spenders")
+async def report_top_spenders(limit: int = 10, admin=Depends(get_current_admin)):
+    rows = await db.users.find({"lifetime_spend": {"$gt": 0}}, {"_id": 0}).sort("lifetime_spend", -1).limit(limit).to_list(limit)
+    return [_serialize_user(u) for u in rows]
+
+
+@api.get("/reports/frequent-visitors")
+async def report_frequent_visitors(days: int = 30, limit: int = 10, admin=Depends(get_current_admin)):
+    start = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    pipe = [
+        {"$match": {"timestamp": {"$gte": start}}},
+        {"$group": {"_id": "$user_id", "visits": {"$sum": 1}, "last": {"$max": "$timestamp"}}},
+        {"$sort": {"visits": -1}},
+        {"$limit": limit},
+    ]
+    rows = await db.attendance_logs.aggregate(pipe).to_list(limit)
+    ids = [r["_id"] for r in rows]
+    umap = await _resolve_users(ids)
+    return [
+        {**_serialize_user(umap.get(r["_id"], {"id": r["_id"], "name": "Unknown", "created_at": ""})),
+         "recent_visits": r["visits"], "most_recent_at": r["last"]}
+        for r in rows if umap.get(r["_id"])
+    ]
+
+
+@api.get("/reports/vips")
+async def report_vips(admin=Depends(get_current_admin)):
+    rows = await db.users.find({"watchlist_status": "vip"}, {"_id": 0}).sort("lifetime_spend", -1).to_list(100)
+    return [_serialize_user(u) for u in rows]
+
+
+@api.post("/reports/send-digest")
+async def send_digest_now(admin=Depends(require_role("admin"))):
+    recipient = await get_alert_recipient(db)
+    if not recipient:
+        raise HTTPException(400, "Set alert_email in Settings first.")
+    data = await compose_digest(db)
+    html = render_digest_html(data)
+    from alerts import send_email as _send
+    email_id = await _send(recipient, f"Sentinel FR Weekly Digest ({data['period_start']} – {data['period_end']})", html)
+    if not email_id:
+        raise HTTPException(502, "Resend rejected the send. Sandbox only sends to Resend account owner.")
+    await db.settings.update_one({"_id": "notifications"}, {"$set": {"last_digest_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    return {"ok": True, "email_id": email_id, "recipient": recipient, "data": data}
+
+
 @api.post("/kiosk/verify")
 async def kiosk_verify(body: KioskIn):
     """Public endpoint (no auth) — validated by kiosk_token stored in settings."""
