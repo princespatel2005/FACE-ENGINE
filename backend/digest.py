@@ -17,16 +17,16 @@ async def compose_digest(db, base_url: str = "") -> Dict:
     now = datetime.now(timezone.utc)
     week_ago = (now - timedelta(days=7)).isoformat()
 
-    # Aggregations
-    total_visits = await db.visits.count_documents({"entry_time": {"$gte": week_ago}})
+    # Aggregations (attendance_logs holds the per-day visit records)
+    total_visits = await db.attendance_logs.count_documents({"timestamp": {"$gte": week_ago}})
     total_unknown = await db.unknown_people.count_documents({"timestamp": {"$gte": week_ago}})
-    unique_visitors = await db.visits.distinct("user_id", {"entry_time": {"$gte": week_ago}})
+    unique_visitors = await db.attendance_logs.distinct("user_id", {"timestamp": {"$gte": week_ago}})
     unique_count = len(unique_visitors)
 
     # VIP visits
     vip_users = await db.users.find({"watchlist_status": "vip"}, {"_id": 0}).to_list(500)
     vip_ids = [u["id"] for u in vip_users]
-    vip_visits = await db.visits.count_documents({"user_id": {"$in": vip_ids}, "entry_time": {"$gte": week_ago}}) if vip_ids else 0
+    vip_visits = await db.attendance_logs.count_documents({"user_id": {"$in": vip_ids}, "timestamp": {"$gte": week_ago}}) if vip_ids else 0
 
     # Top spenders (lifetime)
     top_spenders = await db.users.find({}, {"_id": 0}).sort("lifetime_spend", -1).limit(5).to_list(5)
@@ -34,12 +34,12 @@ async def compose_digest(db, base_url: str = "") -> Dict:
 
     # Most frequent visitors this week
     pipeline = [
-        {"$match": {"entry_time": {"$gte": week_ago}, "user_id": {"$ne": None}}},
+        {"$match": {"timestamp": {"$gte": week_ago}, "user_id": {"$ne": None}}},
         {"$group": {"_id": "$user_id", "visits": {"$sum": 1}}},
         {"$sort": {"visits": -1}},
         {"$limit": 5},
     ]
-    frequent = await db.visits.aggregate(pipeline).to_list(5)
+    frequent = await db.attendance_logs.aggregate(pipeline).to_list(5)
     frequent_ids = [row["_id"] for row in frequent]
     umap = {}
     if frequent_ids:

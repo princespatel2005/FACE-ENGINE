@@ -33,6 +33,16 @@ Build a production-ready AI Face Recognition Web Application (Sentinel FR). Real
 - ✅ **Kiosk Mode**: public `/kiosk?token=...` page, no login required. `POST /api/kiosk/verify` gated by kiosk_token stored in settings. Auto-loops 12-frame verification every 6.5s. Settings page has token generator + shareable URL.
 - ✅ 63/63 backend pytest cases passing (30 original + 33 new for iteration 2).
 
+## Iteration 3 — Retail Transformation (2026-07-30)
+- ✅ **Retail customer schema**: added gender, dob, address, notes, loyalty_points, total_visits, lifetime_spend, last_visit_at fields on users. `POST /api/users` + `PATCH /api/users/{id}` accept them. Sidebar rebranded: Users → Customers, Attendance → Visits.
+- ✅ **Visit tracking**: `_log_attendance_if_needed` now increments `user.total_visits` and updates `last_visit_at` on the first daily recognition. Live Recognition + kiosk + RTSP all share this path.
+- ✅ **Purchase history**: `db.purchases` collection. `GET/POST/DELETE /api/purchases`. Create bumps `lifetime_spend` and `loyalty_points = floor(total/10)`; delete reverses.
+- ✅ **Customer detail page** `/customers/:id`: profile view + inline edit + VIP/Block toggle + purchase list + add-purchase form + 3 KPI cards (visits / lifetime spend / loyalty).
+- ✅ **Register-from-unknown**: `POST /api/register-from-unknown` reads the saved unknown JPEG, re-runs SCRFD/ArcFace, creates a full customer with 1 embedding + copies thumbnail, deletes the unknown row. UI: “Register” button on every unknown card opens a modal.
+- ✅ **Reports page** `/reports`: KPI grid (7-day visits / unique / VIP / unknowns), peak-hour histogram, top spenders, frequent visitors (last 30d), VIP list. Backend: `/api/reports/overview`, `/reports/top-spenders`, `/reports/frequent-visitors`, `/reports/vips`.
+- ✅ **Weekly Digest email**: `digest.py` aggregates last 7 days from `attendance_logs` (fixed collection reference), renders rich HTML, sends via Resend. Scheduler loop checks every hour and fires on Monday 09:00 UTC+. Manual trigger via `POST /api/reports/send-digest`.
+- ✅ 86/86 backend pytest cases passing (30 + 33 + 23 new for iteration 3).
+
 ## Deferred / Backlog (P1)
 - Camera Management page (RTSP/IP camera streams beyond USB webcam)
 - Settings + full Admin Panel UI (users/roles CRUD)
