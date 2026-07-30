@@ -3,16 +3,17 @@ import { useAuth } from "@/context/AuthContext";
 import {
   SquaresFour, VideoCamera, UserPlus, Users as UsersIcon,
   ClockCounterClockwise, Waveform, Warning, SignOut, ShieldCheck,
-  Broadcast, GearSix,
+  Broadcast, GearSix, ChartLine,
 } from "@phosphor-icons/react";
 
 const items = [
   { to: "/", label: "Dashboard", icon: SquaresFour, testid: "nav-dashboard" },
   { to: "/live", label: "Live Recognition", icon: VideoCamera, testid: "nav-live" },
   { to: "/cameras", label: "Cameras", icon: Broadcast, testid: "nav-cameras" },
-  { to: "/register", label: "Register User", icon: UserPlus, testid: "nav-register" },
-  { to: "/users", label: "Users", icon: UsersIcon, testid: "nav-users" },
-  { to: "/attendance", label: "Attendance", icon: Waveform, testid: "nav-attendance" },
+  { to: "/register", label: "Register Customer", icon: UserPlus, testid: "nav-register" },
+  { to: "/users", label: "Customers", icon: UsersIcon, testid: "nav-users" },
+  { to: "/attendance", label: "Visits", icon: Waveform, testid: "nav-attendance" },
+  { to: "/reports", label: "Reports", icon: ChartLine, testid: "nav-reports" },
   { to: "/history", label: "Recognition Log", icon: ClockCounterClockwise, testid: "nav-history" },
   { to: "/unknowns", label: "Unknown Faces", icon: Warning, testid: "nav-unknowns" },
   { to: "/settings", label: "Settings", icon: GearSix, testid: "nav-settings" },
