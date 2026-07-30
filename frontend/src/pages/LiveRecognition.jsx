@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, apiError } from "@/lib/api";
+import { api, UPLOADS_BASE, apiError } from "@/lib/api";
 import useWebcam from "@/hooks/useWebcam";
 import PageHeader from "@/components/PageHeader";
 import { Camera, Play, Stop, Aperture } from "@phosphor-icons/react";
@@ -165,26 +165,69 @@ export default function LiveRecognition() {
                 result.watchlist_status === "vip" ? "border-[#FFD400]/60 bg-[#FFD400]/10" :
                 "border-[#00FF66]/40 bg-[#00FF66]/5"
               }`}>
-                <div className={`text-xs font-mono tracking-widest uppercase ${
-                  result.watchlist_status === "blocked" ? "text-[#FF3B30]" :
-                  result.watchlist_status === "vip" ? "text-[#FFD400]" :
-                  "text-[#00FF66]"
-                }`}>
-                  {result.watchlist_status === "blocked" ? "⚠ BLOCKED IDENTITY" :
-                   result.watchlist_status === "vip" ? "★ VIP IDENTITY" :
-                   "Identity confirmed"}
+                <div className="flex items-start gap-4">
+                  {result.thumbnail_url && (
+                    <img src={UPLOADS_BASE + result.thumbnail_url} alt="" className="w-16 h-16 rounded-md object-cover border border-white/10 shrink-0" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className={`text-[10px] font-mono tracking-widest uppercase ${
+                      result.watchlist_status === "blocked" ? "text-[#FF3B30]" :
+                      result.watchlist_status === "vip" ? "text-[#FFD400]" :
+                      "text-[#00FF66]"
+                    }`}>
+                      {result.watchlist_status === "blocked" ? "⚠ BLOCKED IDENTITY" :
+                       result.watchlist_status === "vip" ? "★ VIP CUSTOMER" :
+                       "Customer identified"}
+                    </div>
+                    <div className="font-heading text-2xl mt-1 truncate">{result.name}</div>
+                    <div className="text-[11px] text-white/50 font-mono mt-0.5">{result.phone || result.employee_id || "—"}</div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="text-[10px] font-mono text-white/40 uppercase tracking-widest">Confidence</div>
+                    <div className="font-mono text-2xl text-[#00FF66]">{(result.similarity * 100).toFixed(1)}%</div>
+                  </div>
                 </div>
-                <div className="font-heading text-2xl mt-2">{result.name}</div>
-                <div className="text-xs text-white/50 font-mono mt-1">{result.employee_id || "—"} · {result.department || "—"}</div>
-                <div className="mt-4 grid grid-cols-2 gap-4 text-xs font-mono">
-                  <div><div className="text-white/40 uppercase tracking-widest">Similarity</div><div className="text-[#00FF66] text-lg">{(result.similarity * 100).toFixed(1)}%</div></div>
-                  <div><div className="text-white/40 uppercase tracking-widest">Votes</div><div className="text-white text-lg">{result.votes}/{result.frames}</div></div>
+
+                <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                  <div className="p-2 rounded bg-black/40 border border-white/5">
+                    <div className="text-[10px] font-mono text-white/40 uppercase tracking-widest">Visits</div>
+                    <div className="font-mono text-lg mt-0.5">{result.total_visits ?? 0}</div>
+                  </div>
+                  <div className="p-2 rounded bg-black/40 border border-white/5">
+                    <div className="text-[10px] font-mono text-white/40 uppercase tracking-widest">Spent</div>
+                    <div className="font-mono text-lg mt-0.5 text-[#00FF66]">₹{Math.round(result.lifetime_spend || 0).toLocaleString()}</div>
+                  </div>
+                  <div className="p-2 rounded bg-black/40 border border-white/5">
+                    <div className="text-[10px] font-mono text-white/40 uppercase tracking-widest">Loyalty</div>
+                    <div className="font-mono text-lg mt-0.5 text-[#FFD400]">{result.loyalty_points ?? 0}</div>
+                  </div>
                 </div>
-                {result.attendance_logged && (
-                  <div className="mt-4 text-[10px] uppercase tracking-widest font-mono text-[#00FF66]">
-                    ✓ Attendance recorded
+
+                {(result.last_bill_amount != null || (result.recent_products || []).length > 0) && (
+                  <div className="mt-4 border-t border-white/10 pt-3">
+                    {result.last_bill_amount != null && (
+                      <div className="flex items-center justify-between text-xs font-mono">
+                        <span className="text-white/40 uppercase tracking-widest text-[10px]">Last bill</span>
+                        <span className="text-white">₹{Math.round(result.last_bill_amount).toLocaleString()} · {result.last_bill_date ? new Date(result.last_bill_date).toLocaleDateString() : "—"}</span>
+                      </div>
+                    )}
+                    {(result.recent_products || []).length > 0 && (
+                      <div className="mt-2 text-[11px] font-mono text-white/60 line-clamp-2">
+                        <span className="text-white/40 uppercase tracking-widest text-[10px] mr-2">Recent</span>
+                        {result.recent_products.join(" · ")}
+                      </div>
+                    )}
                   </div>
                 )}
+
+                <div className="mt-4 flex items-center justify-between font-mono text-[10px] uppercase tracking-widest">
+                  <span className="text-white/40">{result.votes}/{result.frames} frames</span>
+                  {result.attendance_logged && <span className="text-[#00FF66]">✓ Visit recorded</span>}
+                </div>
+
+                <a href={`/customers/${result.user_id}`} data-testid="open-customer-btn" className="mt-4 block text-center py-2 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 font-mono text-[10px] uppercase tracking-widest text-white/80 transition-colors">
+                  Open full profile →
+                </a>
               </div>
             </div>
           )}

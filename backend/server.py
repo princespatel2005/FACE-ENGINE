@@ -608,6 +608,36 @@ async def _save_unknown(img_b64: str, camera_id: str, similarity: float):
     return uid
 
 
+async def _customer_summary(user_id: str) -> dict:
+    """Rich retail snapshot for a recognized customer — used on Live Recognition &
+    kiosk to show last bill, recent products, lifetime spend, loyalty, VIP, etc."""
+    u = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not u:
+        return {}
+    last_bill = await db.purchases.find_one({"user_id": user_id}, {"_id": 0}, sort=[("date", -1)])
+    total_purchases = await db.purchases.count_documents({"user_id": user_id})
+    recent = await db.purchases.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).limit(3).to_list(3)
+    products = []
+    for p in recent:
+        for it in (p.get("items") or []):
+            products.append(it.get("product"))
+            if len(products) >= 5:
+                break
+        if len(products) >= 5:
+            break
+    return {
+        "total_visits": int(u.get("total_visits") or 0),
+        "lifetime_spend": float(u.get("lifetime_spend") or 0),
+        "loyalty_points": int(u.get("loyalty_points") or 0),
+        "last_visit_at": u.get("last_visit_at"),
+        "last_bill_amount": float(last_bill["total"]) if last_bill else None,
+        "last_bill_date": last_bill["date"] if last_bill else None,
+        "total_purchases": total_purchases,
+        "recent_products": products[:5],
+        "phone": u.get("phone"),
+    }
+
+
 @api.post("/recognize")
 async def recognize(body: RecognizeIn, admin=Depends(get_current_admin)):
     if not engine.status()["ready"]:
@@ -708,6 +738,7 @@ async def recognize_multi(body: MultiFrameIn, admin=Depends(get_current_admin)):
                                extra={"name": u.get("name")}, recipient=recipient,
                                base_url=PUBLIC_BASE_URL)
         elapsed_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+        summary = await _customer_summary(top_id)
         return {
             "status": "known", "user_id": top_id, "name": u.get("name"),
             "employee_id": u.get("employee_id"), "department": u.get("department"),
@@ -715,6 +746,7 @@ async def recognize_multi(body: MultiFrameIn, admin=Depends(get_current_admin)):
             "watchlist_status": watchlist_status,
             "votes": top_count, "frames": len(body.images), "attendance_logged": new_attendance,
             "elapsed_ms": elapsed_ms,
+            **summary,
         }
 
     # Unknown — save best frame + alert
@@ -1170,11 +1202,13 @@ async def kiosk_verify(body: KioskIn):
             "frames": len(body.images), "votes": top_count, "kiosk": True,
         })
         new_att = await _log_attendance_if_needed(top_id, body.camera_id, avg)
+        summary = await _customer_summary(top_id)
         return {
             "status": "known", "name": u.get("name"), "employee_id": u.get("employee_id"),
             "department": u.get("department"), "thumbnail_url": u.get("thumbnail_url"),
             "similarity": round(avg, 4), "watchlist_status": u.get("watchlist_status", "normal"),
             "attendance_logged": new_att,
+            **summary,
         }
 
     if best_frame_b64:
