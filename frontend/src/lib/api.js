@@ -1,6 +1,27 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "https://face-engine-backend.onrender.com";
+const getBackendUrl = () => {
+  let envUrl = process.env.REACT_APP_BACKEND_URL;
+  if (envUrl) {
+    envUrl = envUrl.trim().replace(/\/$/, "");
+    if (!envUrl.startsWith("http://") && !envUrl.startsWith("https://")) {
+      envUrl = `https://${envUrl}`;
+    }
+    return envUrl;
+  }
+
+  // Auto-detect local vs production environment
+  if (typeof window !== "undefined") {
+    const hostname = window.location.hostname;
+    if (hostname === "localhost" || hostname === "127.0.0.1") {
+      return "http://localhost:8000";
+    }
+  }
+
+  return "https://face-engine-backend.onrender.com";
+};
+
+export const BACKEND_URL = getBackendUrl();
 export const API = `${BACKEND_URL}/api`;
 export const UPLOADS_BASE = BACKEND_URL;
 
