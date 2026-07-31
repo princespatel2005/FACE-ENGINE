@@ -33,7 +33,10 @@
     "@radix-ui/react-toggle-group": "1.1.7",
     "@radix-ui/react-tooltip": "1.2.4",
     "@tanstack/react-query": "5.56.2",
+<<<<<<< HEAD
     "ajv-keywords": "^3.5.2",
+=======
+>>>>>>> bf5135729ba8a3a8ae73594824766a526545a128
     "axios": "1.18.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
@@ -97,7 +100,10 @@
     "tailwindcss": "3.4.17"
   },
   "resolutions": {
+<<<<<<< HEAD
     "ajv-keywords": "3.5.2",
+=======
+>>>>>>> bf5135729ba8a3a8ae73594824766a526545a128
     "react-router": "7.15.1",
     "node-forge": "1.4.0",
     "fast-uri": "3.1.2",
@@ -141,8 +147,11 @@
     "**/tinyglobby/picomatch": "4.0.4",
     "http-proxy-middleware": "2.0.10"
   },
+<<<<<<< HEAD
   "overrides": {
     "ajv-keywords": "3.5.2"
   },
+=======
+>>>>>>> bf5135729ba8a3a8ae73594824766a526545a128
   "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }
