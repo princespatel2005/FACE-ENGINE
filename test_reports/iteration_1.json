@@ -1,0 +1,49 @@
+{
+  "summary": "Backend-only testing of Smart AI Face Recognition. All 30 pytest tests passed on 1st clean run: auth (login/logout/me + invalid creds), engine health (buffalo_l ready), users CRUD, real InsightFace enrollment with a genuine portrait (obama.jpg, 512-d ArcFace embedding saved), single-frame /api/recognize returns status=known with similarity >= 0.42 for enrolled user, /api/recognize/multi majority-voting returns known + logs attendance + attendance_logged field present, noise images correctly rejected on enroll and produce status=no_face on recognize, attendance/recognition-history/unknowns/dashboard-stats endpoints return expected shapes, and 9 protected endpoints correctly return 401 without a Bearer token while /api/, /api/health/engine, /api/auth/login and /api/auth/logout are public.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/auth/register", "issue": "Referenced in /app/memory/test_credentials.md but not implemented in server.py — either implement it or remove from the docs."},
+      {"endpoint": "CORS + credentials", "issue": "backend/.env has CORS_ORIGINS=\"*\" while cookies are set with SameSite=none Secure and CORSMiddleware uses allow_credentials=True. Browsers reject Access-Control-Allow-Origin: * combined with credentials; frontend cookie auth will silently fail cross-origin. Set CORS_ORIGINS to explicit origin(s) (e.g. the REACT_APP_BACKEND_URL host)."},
+      {"endpoint": "POST /api/auth/login", "issue": "No brute-force lockout / rate limiting implemented (playbook expects lockout after 5 failed attempts). Not blocking MVP but worth adding."},
+      {"endpoint": "POST /api/users", "issue": "Returns 200 for creation instead of the more conventional 201 Created (not blocking)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_face_recognition.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Consider setting CORS_ORIGINS in backend/.env to the explicit frontend origin instead of '*' so httpOnly cookie auth works cross-origin (browsers block '*' when allow_credentials=True).",
+    "Either implement POST /api/auth/register (referenced in /app/memory/test_credentials.md) or remove it from the credentials doc.",
+    "Optional: add login rate-limiting/lockout for brute-force protection."
+  ],
+  "critical_code_review_comments": [
+    "server.py uses deprecated FastAPI @app.on_event('startup')/'shutdown' hooks — migrate to lifespan handlers.",
+    "CORS + cookies mismatch (allow_credentials=True with allow_origins=['*']) is a real cross-origin auth risk in production; fine for same-origin ingress but should be tightened.",
+    "No embedding de-duplication in enrollment: sending the same image N times stores N nearly-identical vectors and inflates the gallery. Consider a similarity threshold check against existing embeddings for the same user_id before insert.",
+    "face_engine.decode_base64_image / analyze / quality_check are synchronous and CPU-heavy; they run inside FastAPI request handlers on the event loop and can block other requests. Wrap in run_in_executor / asyncio.to_thread for better concurrency.",
+    "engine.status() is read without holding self._lock (minor race with _load thread).",
+    "quality_check uses fixed pixel thresholds (min 60x60, blur<40, brightness 35..235). Values look sensible but not configurable via env.",
+    "recognize_multi has ratio threshold 0.4 that means with 3 frames a single winning vote passes majority — arguably too permissive; consider majority (>0.5) with a minimum-frames guard."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_face_recognition.py",
+    "/app/test_fixtures/portrait.jpg",
+    "/app/test_fixtures/t1.jpg"
+  ],
+  "success_rate": {"backend": "100% (30/30 pytest cases)", "frontend": "not tested (backend-only per request)"},
+  "test_credentials": "admin@example.com / admin123 (verified working via /api/auth/login)",
+  "seed_data_creation": "Tests create a transient TEST_Obama user (unique employee_id TEST_EMP_001) with 4 real InsightFace embeddings from /app/test_fixtures/portrait.jpg, then delete it in fixture teardown. A TestUserLifecycle._cleanup_prior fixture also purges any stale TEST_* users from previous runs so the gallery stays deterministic across retries.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "conftest.py exposes base_url, api_client, authed_client, portrait_b64 (real single-face obama.jpg from /app/test_fixtures), and noise_b64 (random-noise image). All interdependent tests (create → enroll → recognize → attendance/history) live inside TestUserLifecycle so xdist loadscope keeps them on one worker (loadscope groups by CLASS for methods, not by module). If you split them across classes you'll get two TEST_Obama users enrolled with the same portrait and recognize will match the wrong id. Face engine reports ready=true instantly on this pod. FACE_MATCH_THRESHOLD=0.42; obama.jpg self-similarity is well above threshold.",
+  "rca_of_previous_run": "Initial run failed 3 tests because tests were split into TestEnrollment / TestRecognizeSingle / TestRecognizeMulti / TestListEndpoints. pytest-xdist --dist loadscope groups by test class (not module) for methods, so the module-scoped `created_user_id` fixture was instantiated on both workers, creating two TEST_Obama users with identical portrait embeddings. Multi-frame recognition then matched the other worker's user_id. Fix: consolidated all interdependent methods into one TestUserLifecycle class with a class-scoped user_id fixture — now runs on exactly one worker with a single canonical user id. No backend change required."
+}

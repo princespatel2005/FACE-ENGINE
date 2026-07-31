@@ -1,0 +1,59 @@
+@import url("https://fonts.googleapis.com/css2?family=Chivo:wght@300;400;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { background: #0A0A0A; }
+
+body {
+    margin: 0;
+    font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    color: #fff;
+}
+
+.font-heading { font-family: "Chivo", ui-sans-serif, system-ui, sans-serif; }
+.font-mono { font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; }
+.font-sans { font-family: "Chivo", ui-sans-serif, system-ui, sans-serif; }
+
+@layer base {
+    :root {
+        --background: 0 0% 4%;
+        --foreground: 0 0% 100%;
+        --card: 0 0% 7%;
+        --card-foreground: 0 0% 100%;
+        --popover: 0 0% 7%;
+        --popover-foreground: 0 0% 100%;
+        --primary: 138 100% 50%;
+        --primary-foreground: 0 0% 4%;
+        --secondary: 0 0% 10%;
+        --secondary-foreground: 0 0% 100%;
+        --muted: 0 0% 10%;
+        --muted-foreground: 0 0% 60%;
+        --accent: 0 0% 10%;
+        --accent-foreground: 0 0% 100%;
+        --destructive: 4 100% 60%;
+        --destructive-foreground: 0 0% 100%;
+        --border: 0 0% 20%;
+        --input: 0 0% 15%;
+        --ring: 138 100% 50%;
+        --radius: 0.375rem;
+    }
+}
+
+@layer base {
+    * { border-color: hsl(var(--border) / 0.4); }
+    body { background: #0A0A0A; color: #fff; }
+}
+
+/* Debug wrapper support kept from template */
+@layer base {
+    [data-debug-wrapper="true"] { display: contents !important; }
+    [data-debug-wrapper="true"] > * {
+        margin-left: inherit; margin-right: inherit; margin-top: inherit; margin-bottom: inherit;
+        padding-left: inherit; padding-right: inherit; padding-top: inherit; padding-bottom: inherit;
+        column-gap: inherit; row-gap: inherit; gap: inherit;
+    }
+}
