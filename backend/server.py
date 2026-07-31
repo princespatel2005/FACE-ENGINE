@@ -369,16 +369,11 @@ async def root():
     return {"ok": True, "service": "smart-face-recognition"}
 
 
-<<<<<<< HEAD
 @api.get("/health")
 @app.get("/health")
 @app.get("/api/health")
 async def health():
     return {"ok": True, "status": "healthy"}
-
-
-=======
->>>>>>> bf5135729ba8a3a8ae73594824766a526545a128
 @api.get("/health/engine")
 async def engine_health():
     return engine.status()
@@ -1252,7 +1247,6 @@ async def kiosk_verify(body: KioskIn):
 app.include_router(api)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_ROOT)), name="uploads")
 
-<<<<<<< HEAD
 cors_origins_raw = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000,http://127.0.0.1:3000,http://127.0.0.1:8000")
 origins = [o.strip() for o in cors_origins_raw.split(",") if o.strip()]
 
@@ -1261,12 +1255,6 @@ app.add_middleware(
     allow_credentials=True,
     allow_origins=origins,
     allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
-=======
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
->>>>>>> bf5135729ba8a3a8ae73594824766a526545a128
     allow_methods=["*"],
     allow_headers=["*"],
 )
