@@ -16,6 +16,7 @@ import logging
 import os
 import uuid
 from collections import Counter
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -69,7 +70,67 @@ except Exception:
     client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
 
-app = FastAPI(title="Smart AI Face Recognition")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logic
+    try:
+        await db.admins.create_index("email", unique=True)
+        await db.users.create_index("id", unique=True)
+        await db.users.create_index([("name", "text"), ("employee_id", "text"), ("department", "text"), ("phone", "text")])
+        await db.embeddings.create_index("user_id")
+        await db.attendance_logs.create_index("timestamp")
+        await db.recognition_logs.create_index("timestamp")
+        await db.unknown_people.create_index("timestamp")
+        await db.alerts.create_index("timestamp")
+        await db.cameras.create_index("id", unique=True)
+
+        existing = await db.admins.find_one({"email": ADMIN_EMAIL})
+        if not existing:
+            await db.admins.insert_one({
+                "id": str(uuid.uuid4()),
+                "email": ADMIN_EMAIL,
+                "name": "Administrator",
+                "role": "admin",
+                "password_hash": hash_password(ADMIN_PASSWORD),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            logger.info("Seeded admin %s", ADMIN_EMAIL)
+        elif not verify_password(ADMIN_PASSWORD, existing["password_hash"]):
+            await db.admins.update_one(
+                {"email": ADMIN_EMAIL},
+                {"$set": {"password_hash": hash_password(ADMIN_PASSWORD)}},
+            )
+            logger.info("Refreshed admin password")
+    except Exception as err:
+        logger.error("=" * 60)
+        logger.error("❌ MONGODB AUTHENTICATION/CONNECTION ERROR:")
+        logger.error("%s", err)
+        logger.error("Please update MONGO_URL in backend/.env with your correct MongoDB Atlas password or connection string.")
+        logger.error("=" * 60)
+        raise err
+
+    engine.start_background_load()
+
+    # Auto-start enabled cameras
+    async def relaunch():
+        # Small delay so face engine can warm
+        await asyncio.sleep(2)
+        async for cam in db.cameras.find({"enabled": True}):
+            await camera_manager.add(cam, _on_camera_detections)
+
+    asyncio.create_task(relaunch())
+    asyncio.create_task(scheduler_loop(db))
+
+    yield
+
+    # Shutdown logic
+    for cid in list(camera_manager.workers.keys()):
+        await camera_manager.stop(cid)
+    client.close()
+
+
+app = FastAPI(title="Smart AI Face Recognition", lifespan=lifespan)
 
 camera_manager = CameraManager(UPLOAD_ROOT / "cameras")
 # Cooldown map for unknown alerts per camera → last alert timestamp (isoformat)
@@ -298,62 +359,7 @@ async def _on_camera_detections(cam_id: str, cam_name: str, detections: list, an
                                base_url=PUBLIC_BASE_URL)
 
 
-@app.on_event("startup")
-async def on_startup():
-    try:
-        await db.admins.create_index("email", unique=True)
-        await db.users.create_index("id", unique=True)
-        await db.users.create_index([("name", "text"), ("employee_id", "text"), ("department", "text"), ("phone", "text")])
-        await db.embeddings.create_index("user_id")
-        await db.attendance_logs.create_index("timestamp")
-        await db.recognition_logs.create_index("timestamp")
-        await db.unknown_people.create_index("timestamp")
-        await db.alerts.create_index("timestamp")
-        await db.cameras.create_index("id", unique=True)
 
-        existing = await db.admins.find_one({"email": ADMIN_EMAIL})
-        if not existing:
-            await db.admins.insert_one({
-                "id": str(uuid.uuid4()),
-                "email": ADMIN_EMAIL,
-                "name": "Administrator",
-                "role": "admin",
-                "password_hash": hash_password(ADMIN_PASSWORD),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            })
-            logger.info("Seeded admin %s", ADMIN_EMAIL)
-        elif not verify_password(ADMIN_PASSWORD, existing["password_hash"]):
-            await db.admins.update_one(
-                {"email": ADMIN_EMAIL},
-                {"$set": {"password_hash": hash_password(ADMIN_PASSWORD)}},
-            )
-            logger.info("Refreshed admin password")
-    except Exception as err:
-        logger.error("=" * 60)
-        logger.error("❌ MONGODB AUTHENTICATION/CONNECTION ERROR:")
-        logger.error("%s", err)
-        logger.error("Please update MONGO_URL in backend/.env with your correct MongoDB Atlas password or connection string.")
-        logger.error("=" * 60)
-        raise err
-
-    engine.start_background_load()
-
-    # Auto-start enabled cameras
-    async def relaunch():
-        # Small delay so face engine can warm
-        await asyncio.sleep(2)
-        async for cam in db.cameras.find({"enabled": True}):
-            await camera_manager.add(cam, _on_camera_detections)
-
-    asyncio.create_task(relaunch())
-    asyncio.create_task(scheduler_loop(db))
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    for cid in list(camera_manager.workers.keys()):
-        await camera_manager.stop(cid)
-    client.close()
 
 
 # ------------------------------------------------------------------
@@ -1244,21 +1250,52 @@ async def kiosk_verify(body: KioskIn):
 # ------------------------------------------------------------------
 # Mount routers & middleware
 # ------------------------------------------------------------------
-app.include_router(api)
-app.mount("/uploads", StaticFiles(directory=str(UPLOAD_ROOT)), name="uploads")
+cors_origins_raw = os.environ.get("CORS_ORIGINS", "*")
+origins = []
+if cors_origins_raw:
+    for o in cors_origins_raw.split(","):
+        cleaned = o.strip().strip("'\"").rstrip("/")
+        if cleaned:
+            origins.append(cleaned)
 
-cors_origins_raw = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000,http://127.0.0.1:3000,http://127.0.0.1:8000")
-origins = [o.strip() for o in cors_origins_raw.split(",") if o.strip()]
+if not origins or "*" in origins:
+    origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
     allow_origins=origins,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origin_regex=r"https?://.*",
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(api)
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_ROOT)), name="uploads")
 if __name__ == "__main__":
+    import socket
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)
+
+    req_port = int(os.environ.get("PORT", 8000))
+    host = os.environ.get("HOST", "0.0.0.0")
+
+    def is_port_available(h: str, p: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((h, p))
+                return True
+            except OSError:
+                return False
+
+    target_port = req_port
+    if not is_port_available(host, target_port) and not is_port_available("127.0.0.1", target_port):
+        for alt in range(req_port + 1, req_port + 20):
+            if is_port_available("127.0.0.1", alt):
+                target_port = alt
+                break
+        logger.warning(
+            "⚠️ Port %s is currently in use/forbidden. Automatically switching to port %s.",
+            req_port, target_port
+        )
+
+    uvicorn.run("server:app", host=host, port=target_port, reload=True)

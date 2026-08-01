@@ -8,17 +8,24 @@ import requests
 
 BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if "REACT_APP_BACKEND_URL" in os.environ else None
 if not BASE_URL:
-    # fallback to reading frontend/.env
-    _env_path = Path("/app/frontend/.env")
-    for line in _env_path.read_text().splitlines():
-        if line.startswith("REACT_APP_BACKEND_URL"):
-            BASE_URL = line.split("=", 1)[1].strip().strip('"').rstrip("/")
-            break
+    # fallback to reading frontend/.env relative to project root or default
+    root = Path(__file__).resolve().parent.parent.parent
+    _env_path = root / "frontend" / ".env"
+    if _env_path.exists():
+        for line in _env_path.read_text().splitlines():
+            if line.startswith("REACT_APP_BACKEND_URL"):
+                BASE_URL = line.split("=", 1)[1].strip().strip('"').rstrip("/")
+                break
+    if not BASE_URL:
+        BASE_URL = "http://localhost:8000"
 
 ADMIN_EMAIL = "admin@example.com"
 ADMIN_PASSWORD = "admin123"
 
-FIXTURES = Path("/app/test_fixtures")
+root_dir = Path(__file__).resolve().parent.parent.parent
+FIXTURES = root_dir / "test_fixtures"
+if not FIXTURES.exists():
+    FIXTURES = Path(__file__).resolve().parent.parent / "test_fixtures"
 
 
 @pytest.fixture(scope="session")
