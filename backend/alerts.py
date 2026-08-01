@@ -125,3 +125,70 @@ async def get_alert_recipient(db) -> str:
     if s and s.get("alert_email"):
         return s["alert_email"]
     return os.environ.get("ALERT_TO", "").strip() or ""
+
+
+async def send_sms_notification(phone_number: str, message_text: str) -> bool:
+    """Send mobile SMS notification via Twilio if TWILIO_ACCOUNT_SID/AUTH_TOKEN are set."""
+    account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "").strip()
+    auth_token = os.environ.get("TWILIO_AUTH_TOKEN", "").strip()
+    from_phone = os.environ.get("TWILIO_PHONE_NUMBER", "").strip()
+
+    if account_sid and auth_token and from_phone and phone_number:
+        try:
+            import base64
+            import urllib.parse
+            import urllib.request
+            url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
+            data = urllib.parse.urlencode({"To": phone_number, "From": from_phone, "Body": message_text}).encode("utf-8")
+            req = urllib.request.Request(url, data=data, method="POST")
+            auth_str = f"{account_sid}:{auth_token}"
+            b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
+            req.add_header("Authorization", f"Basic {b64_auth}")
+            req.add_header("Content-Type", "application/x-www-form-urlencoded")
+
+            def _send():
+                with urllib.request.urlopen(req) as resp:
+                    return resp.status in (200, 201)
+
+            ok = await asyncio.to_thread(_send)
+            logger.info("Sent mobile SMS notification to %s: %s", phone_number, ok)
+            return ok
+        except Exception as err:
+            logger.warning("Mobile SMS notification failed for %s: %s", phone_number, err)
+            return False
+    return False
+
+
+async def notify_user_match(db, user_data: dict, camera_id: str, similarity: float):
+    """Notify the recognized user directly on mobile via SMS and Email when their face matches."""
+    if not user_data:
+        return
+    name = user_data.get("name", "User")
+    phone = user_data.get("phone", "").strip()
+    email = user_data.get("email", "").strip()
+    watchlist_status = user_data.get("watchlist_status", "normal")
+    sim_percent = f"{similarity * 100:.1f}%"
+
+    sms_msg = f"Sentinel FR Alert: Hello {name}, your face match was verified on camera '{camera_id}' ({sim_percent} confidence)."
+    if watchlist_status == "vip":
+        sms_msg = f"Sentinel FR Alert: Welcome VIP Guest {name}! Face verified on camera '{camera_id}' ({sim_percent} confidence)."
+
+    if phone:
+        await send_sms_notification(phone, sms_msg)
+
+    if email:
+        subject = f"[Sentinel FR Alert] Face Match Verified: {name}"
+        html = f"""
+        <div style="font-family: -apple-system, sans-serif; background: #0A0A0A; color: #fff; padding: 24px;">
+          <div style="max-width: 480px; margin: 0 auto; background: #121212; border: 1px solid #00FF66; border-radius: 8px; padding: 20px;">
+            <div style="color: #00FF66; font-size: 11px; text-transform: uppercase; font-family: monospace;">Face Match Verified</div>
+            <h2 style="margin: 8px 0 4px; color: #fff;">Hello {name}</h2>
+            <p style="color: #A1A1AA; font-size: 13px;">Your facial identity was recognized on camera <b>{camera_id}</b>.</p>
+            <div style="margin-top: 16px; font-family: monospace; font-size: 12px; color: #00FF66;">
+              Match Confidence: <b>{sim_percent}</b>
+            </div>
+          </div>
+        </div>
+        """
+        await send_email(email, subject, html)
+

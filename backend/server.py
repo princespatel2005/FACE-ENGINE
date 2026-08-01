@@ -38,7 +38,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field
 
 from face_engine import cosine_similarity, engine
-from alerts import create_alert, get_alert_recipient
+from alerts import create_alert, get_alert_recipient, notify_user_match
 from cameras import CameraManager
 from digest import compose_digest, render_digest_html, scheduler_loop
 
@@ -699,6 +699,7 @@ async def recognize(body: RecognizeIn, admin=Depends(get_current_admin)):
                 "id": str(uuid.uuid4()), "user_id": uid, "camera_id": body.camera_id,
                 "similarity": sim, "timestamp": datetime.now(timezone.utc).isoformat(),
             })
+            asyncio.create_task(notify_user_match(db, u, body.camera_id, sim))
         else:
             results.append({"bbox": det.bbox, "status": "unknown", "similarity": round(sim, 4)})
 
@@ -762,6 +763,7 @@ async def recognize_multi(body: MultiFrameIn, admin=Depends(get_current_admin)):
             "frames": len(body.images), "votes": top_count,
         })
         new_attendance = await _log_attendance_if_needed(top_id, body.camera_id, avg)
+        asyncio.create_task(notify_user_match(db, u, body.camera_id, avg))
         recipient = await get_alert_recipient(db)
         if watchlist_status == "blocked":
             await create_alert(db, "blocked", f"BLOCKED: {u.get('name')}", body.camera_id,

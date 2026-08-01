@@ -54,6 +54,13 @@ export default function LiveRecognition() {
       setResult(data);
       if (data.status === "known") {
         toast.success(`Identified: ${data.name}`, { description: `Confidence ${(data.similarity * 100).toFixed(1)}%` });
+        if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+          try {
+            new Notification(`Face Match Verified: ${data.name}`, {
+              body: `Confidence: ${(data.similarity * 100).toFixed(1)}% · Camera webcam-01`,
+            });
+          } catch (_) {}
+        }
       } else if (data.status === "unknown") {
         toast.error("Unknown person", { description: "Face saved for review." });
       } else {
