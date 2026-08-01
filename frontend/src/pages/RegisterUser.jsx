@@ -42,7 +42,7 @@ export default function RegisterUser() {
 
   const captureFrame = () => {
     if (!running) return;
-    const img = snap(0.85);
+    const img = snap(0.65);
     if (!img) return;
     const nextFrames = [...frames, img];
     setFrames(nextFrames);

@@ -535,7 +535,12 @@ async def enroll(user_id: str, body: EnrollIn, admin=Depends(require_role("admin
     rejected = []
     thumbnail_saved = False
 
-    for idx, img_b64 in enumerate(body.images):
+    images = body.images
+    if len(images) > 14:
+        step_sz = len(images) / 14.0
+        images = [images[int(i * step_sz)] for i in range(14)]
+
+    for idx, img_b64 in enumerate(images):
         try:
             img = engine.decode_base64_image(img_b64)
         except Exception:
@@ -713,7 +718,12 @@ async def recognize_multi(body: MultiFrameIn, admin=Depends(get_current_admin)):
     votes: List[tuple] = []  # (user_id or None, similarity)
     best_frame_b64 = None
 
-    for img_b64 in body.images:
+    images = body.images
+    if len(images) > 6:
+        step_sz = len(images) / 6.0
+        images = [images[int(i * step_sz)] for i in range(6)]
+
+    for img_b64 in images:
         try:
             img = engine.decode_base64_image(img_b64)
         except Exception:
