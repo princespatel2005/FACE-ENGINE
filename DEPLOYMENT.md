@@ -93,7 +93,7 @@ All environment variable templates are provided in `.env.example` and `.example.
    - **Name**: `face-engine-backend`
    - **Environment**: `Python 3`
    - **Region**: Choose nearest region
-   - **Build Command**: `pip install --upgrade pip setuptools wheel && pip install "numpy<2.0.0" Cython && pip install -r backend/requirements.txt`
+   - **Build Command**: `pip install --upgrade pip setuptools wheel && pip install "numpy<2.0.0" Cython && pip install -r backend/requirements.txt && python -c "from insightface.app import FaceAnalysis; FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'], allowed_modules=['detection', 'recognition'])"`
    - **Start Command**: `cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT`
 4. Add Environment Variables:
    - `MONGO_URL`: `mongodb+srv://<username>:<password>@cluster0.mongodb.net/?retryWrites=true&w=majority`
